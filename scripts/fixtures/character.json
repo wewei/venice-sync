@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "1",
+  "exportedAt": "2026-10-27T11:00:00.000Z",
+  "character": {
+    "name": "Venice Sync Character fixture",
+    "description": "A synthetic character for import/export verification.",
+    "instructions": "You are a synthetic verification fixture. No inference request should be sent.",
+    "intro": "Synthetic Character greeting.",
+    "photo": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
+    "textSettings": {
+      "model": { "active": false },
+      "advancedSettings": { "active": true, "temperature": 0.7, "topP": 0.9 }
+    },
+    "context": [
+      { "id": "fixture-note", "fileName": "note.txt", "text": "Stored context text must survive a Character copy round trip.", "tokens": 15 }
+    ],
+    "tags": ["synthetic", "verification"],
+    "customSystemPrompt": "Synthetic custom system prompt.",
+    "useCustomSystemPrompt": true,
+    "characterVoice": { "voiceId": "af_sky", "speed": 1 },
+    "hideThoughtProcess": true,
+    "reasoning": false,
+    "isPublic": false,
+    "isApiVisible": false
+  }
+}

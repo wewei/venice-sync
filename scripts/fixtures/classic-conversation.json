@@ -1,0 +1,39 @@
+{
+  "format": "venice-sync-classic",
+  "version": 1,
+  "exportedAt": "2026-10-27T04:00:00.000Z",
+  "conversation": {
+    "id": "venice-sync-fixture-conversation",
+    "name": "Venice Sync round-trip fixture",
+    "modelId": "venice-uncensored",
+    "type": "text",
+    "prompt": "",
+    "temperature": 0.7,
+    "createdAtUnixTimestamp": 1793073600000,
+    "updatedAtUnixTimestamp": 1793073600001
+  },
+  "messages": [
+    {
+      "id": "venice-sync-fixture-user",
+      "conversationId": "venice-sync-fixture-conversation",
+      "role": "user",
+      "content": "Synthetic user message for Venice Sync import/export verification.",
+      "modelType": "text",
+      "modelId": "venice-uncensored",
+      "parentMessageId": null,
+      "createdAtUnixTimestamp": 1793073600000,
+      "updatedAtUnixTimestamp": 1793073600000
+    },
+    {
+      "id": "venice-sync-fixture-assistant",
+      "conversationId": "venice-sync-fixture-conversation",
+      "role": "assistant",
+      "content": "Synthetic assistant reply. No inference request was sent.",
+      "modelType": "text",
+      "modelId": "venice-uncensored",
+      "parentMessageId": null,
+      "createdAtUnixTimestamp": 1793073600001,
+      "updatedAtUnixTimestamp": 1793073600001
+    }
+  ]
+}

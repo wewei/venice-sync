@@ -1,0 +1,88 @@
+{
+  "format": "venice-sync-mind-conversation",
+  "version": 1,
+  "exportedAt": "2026-10-27T06:00:00.000Z",
+  "conversation": {
+    "id": "mind-fixture-conversation",
+    "name": "Venice Sync Mind history fixture",
+    "type": "chat",
+    "mindId": "fixture-local-mind",
+    "createdAtUnixTimestamp": 1793080800000,
+    "updatedAtUnixTimestamp": 1793080800002
+  },
+  "messages": [
+    {
+      "id": "mind-fixture-user",
+      "mind_conversation_id": "mind-fixture-conversation",
+      "role": "user",
+      "status": "completed",
+      "turn_id": "mind-fixture-user",
+      "created_at_unix_timestamp": 1793080800000,
+      "updated_at_unix_timestamp": 1793080800000,
+      "output_items": [
+        {
+          "id": "mind-fixture-user-item",
+          "type": "message",
+          "response_id": "mind-fixture-user",
+          "status": "completed",
+          "output_index": 0,
+          "content": [
+            {
+              "id": "mind-fixture-user-text",
+              "type": "output_text",
+              "item_id": "mind-fixture-user-item",
+              "response_id": "mind-fixture-user",
+              "text": "Synthetic Mind history prompt. Do not send an inference request.",
+              "content_index": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "mind-fixture-assistant",
+      "mind_conversation_id": "mind-fixture-conversation",
+      "role": "assistant",
+      "status": "completed",
+      "turn_id": "mind-fixture-user",
+      "created_at_unix_timestamp": 1793080800001,
+      "updated_at_unix_timestamp": 1793080800002,
+      "output_items": [
+        {
+          "id": "mind-fixture-reasoning",
+          "type": "reasoning",
+          "response_id": "mind-fixture-assistant",
+          "status": "completed",
+          "output_index": 0,
+          "content": [
+            {
+              "id": "mind-fixture-reasoning-text",
+              "type": "output_text",
+              "item_id": "mind-fixture-reasoning",
+              "response_id": "mind-fixture-assistant",
+              "text": "Synthetic reasoning retained in the archive.",
+              "content_index": 0
+            }
+          ]
+        },
+        {
+          "id": "mind-fixture-assistant-item",
+          "type": "message",
+          "response_id": "mind-fixture-assistant",
+          "status": "completed",
+          "output_index": 1,
+          "content": [
+            {
+              "id": "mind-fixture-assistant-text",
+              "type": "output_text",
+              "item_id": "mind-fixture-assistant-item",
+              "response_id": "mind-fixture-assistant",
+              "text": "Synthetic Mind history reply restored without inference.",
+              "content_index": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

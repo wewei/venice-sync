@@ -1,0 +1,1316 @@
+import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
+import { chromium } from "playwright-core"
+import { strFromU8, unzipSync } from "fflate"
+import { syntheticMindPackage } from "./fixtures/mind-package.mjs"
+
+const root = fileURLToPath(new URL("../", import.meta.url))
+const extensionOrigin =
+  "chrome-extension://dhdgffkkebhmkfjojejmpbldmpobfkfo"
+const scriptUrl = "http://127.0.0.1:4173/venice-sync.user.js"
+const hostId = "venice-sync-userscript-host"
+const install = process.argv.includes("--install")
+const transfer = process.argv.includes("--transfer")
+const mindTransfer = process.argv.includes("--mind-transfer")
+const agenticTransfer = process.argv.includes("--agentic-transfer")
+const charactersTransfer = process.argv.includes("--characters")
+const mindPackage = process.argv.includes("--mind-package")
+const selectedConversation = process.argv.find((argument) => argument.startsWith("--conversation="))?.slice("--conversation=".length)
+const selectedAgentic = process.argv.find((argument) => argument.startsWith("--agentic-conversation="))?.slice("--agentic-conversation=".length)
+const selectedCharacter = process.argv.find((argument) => argument.startsWith("--character="))?.slice("--character=".length)
+
+async function endpoint() {
+  if (process.env.CDP_ENDPOINT) return process.env.CDP_ENDPOINT
+  if (!process.env.LOCALAPPDATA) {
+    throw new Error("Set CDP_ENDPOINT to your Chrome CDP endpoint.")
+  }
+  const file = path.join(
+    process.env.LOCALAPPDATA,
+    "Google",
+    "Chrome",
+    "User Data",
+    "DevToolsActivePort",
+  )
+  const [port, browserPath] = (await readFile(file, "utf8"))
+    .trim()
+    .split(/\r?\n/)
+  if (!/^\d+$/.test(port) || !browserPath?.startsWith("/devtools/browser/")) {
+    throw new Error("Chrome's DevToolsActivePort file is invalid.")
+  }
+  return `ws://127.0.0.1:${port}${browserPath}`
+}
+
+async function installScript(context) {
+  const artifact = await readFile(path.join(root, "dist/venice-sync.user.js"))
+  const response = await fetch(scriptUrl)
+  assert.equal(response.status, 200, "Run npm run preview before installation.")
+  const served = Buffer.from(await response.arrayBuffer())
+  assert.ok(artifact.equals(served), "Server is not serving the current build.")
+
+  const previousPages = new Set(context.pages())
+  const sourcePage = await context.newPage()
+  console.log("Opening the built userscript in Tampermonkey.")
+  try {
+    await sourcePage.goto(scriptUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 30_000,
+    })
+  } catch (error) {
+    const extensionClosedSource = sourcePage.isClosed() && context.browser()?.isConnected()
+    if (!(error instanceof Error) || (!error.message.includes("net::ERR_ABORTED") && !extensionClosedSource)) {
+      throw error
+    }
+    console.log("Chrome handed userscript navigation to an extension.")
+  }
+
+  let installer
+  const deadline = Date.now() + 30_000
+  while (Date.now() < deadline) {
+    installer = context.pages().find((page) => {
+      if (previousPages.has(page) && !page.url().includes(scriptUrl)) return false
+      return (
+        page.url().startsWith(`${extensionOrigin}/`) &&
+        /\/(?:ask|install)\.html(?:[?#]|$)/.test(page.url())
+      )
+    })
+    if (installer) break
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  if (!installer) {
+    throw new Error(
+      "Tampermonkey did not open an installer. Install the built script manually, then rerun without --install.",
+    )
+  }
+
+  await installer.bringToFront()
+  const installButton = installer.getByRole("button", {
+    name: /^(install|reinstall|update|\u5b89\u88c5|\u91cd\u65b0\u5b89\u88c5|\u66f4\u65b0)$/i,
+  })
+  await installButton.waitFor({ state: "visible", timeout: 20_000 })
+  await installButton.click()
+  console.log("Approved installation in Tampermonkey's own installer UI.")
+}
+
+async function closeWithPointerCheck(page, dialog) {
+  const close = dialog.getByRole("button", { name: "Close", exact: true })
+  await dialog.evaluate(async (element) => {
+    await Promise.all(element.getAnimations().map((animation) => animation.finished))
+  })
+  const before = await close.boundingBox()
+  assert.ok(before, "Close button has no layout box.")
+  await page.mouse.move(before.x + before.width - 2, before.y + before.height / 2)
+  await page.waitForTimeout(200)
+  const assertStable = async (phase) => {
+    const box = await close.boundingBox()
+    assert.ok(box, `Close button disappeared during ${phase}.`)
+    for (const key of ["x", "y", "width", "height"]) {
+      assert.ok(
+        Math.abs(box[key] - before[key]) <= 1,
+        `Close button ${key} moved during ${phase}: ${before[key]} -> ${box[key]}`,
+      )
+    }
+  }
+  await assertStable("hover")
+  await page.mouse.down()
+  try {
+    await page.waitForTimeout(200)
+    await assertStable("pointer press")
+  } finally {
+    await page.mouse.up()
+  }
+  await dialog.waitFor({ state: "hidden" })
+}
+
+async function navigatePanel(dialog, name) {
+  const button = dialog.getByRole("navigation", { name: "Sync pages" }).getByRole("button", { name, exact: true })
+  if (await button.getAttribute("aria-current") !== "page") await button.click()
+}
+
+async function openConversations(dialog) {
+  await navigatePanel(dialog, "Conversations")
+  await dialog.getByTestId("conversation-list").waitFor({ state: "visible", timeout: 45_000 })
+}
+
+async function waitForMindHistory(dialog) {
+  try {
+    await dialog.getByTestId("conversation-list").waitFor({ state: "visible", timeout: 30_000 })
+    const errors = await dialog.getByRole("alert").allTextContents()
+    assert.equal(errors.length, 0, `Conversation reading reported errors: ${errors.join("; ")}`)
+  } catch (error) {
+    const alerts = await dialog.getByRole("region", { name: "Conversation transfer" }).locator('[role="alert"]').allTextContents()
+    throw new Error(alerts.length ? `Mind history UI reported: ${alerts.join("; ")}` : "Mind history did not finish loading.", { cause: error })
+  }
+}
+
+async function waitForSignedInVenice(page) {
+  await page.waitForFunction(() => window.Clerk?.loaded &&
+    typeof window.Clerk?.user?.id === "string" &&
+    typeof window.Clerk?.session?.getToken === "function", undefined, { timeout: 45_000 })
+}
+
+async function openUiDiagnostics(dialog) {
+  await navigatePanel(dialog, "Details")
+  const details = dialog.getByTestId("ui-diagnostics")
+  if (await details.getAttribute("open") === null) await details.locator("summary").click()
+}
+
+async function checkAgenticGlyphs(page, dialog) {
+  const rows = dialog.locator('[data-conversation-kind="agentic"]')
+  const count = await rows.count()
+  if (!count) return 0
+  await page.waitForFunction(() => document.querySelector('a[href="/chat/agent"] svg, a[href^="/chat/agent/"] svg'), undefined, { timeout: 30_000 })
+  await rows.first().locator('[data-venice-icon="agentic-native"]').waitFor({ state: "visible", timeout: 10_000 })
+  const expected = await page.evaluate(() => {
+    const source = document.querySelector('a[href="/chat/agent"] svg, a[href^="/chat/agent/"] svg')
+    return { viewBox: source.getAttribute("viewBox"), paths: [...source.querySelectorAll("path")].map((path) => path.getAttribute("d")) }
+  })
+  assert.ok(expected.paths.length, "Native Agentic glyph had no observable paths.")
+  for (const row of await rows.all()) {
+    const actual = await row.locator('[data-venice-icon="agentic-native"]').evaluate((svg) => ({
+      viewBox: svg.getAttribute("viewBox"), paths: [...svg.querySelectorAll("path")].map((path) => path.getAttribute("d")),
+    }))
+    assert.deepEqual(actual, expected, "Agentic conversation glyph differs from native Venice.")
+  }
+  return count
+}
+
+async function checkPanelPages(page, dialog) {
+  await navigatePanel(dialog, "Overview")
+  await page.waitForFunction(() => ["/chat/classic", "/character-chat", "/minds"].every((href) =>
+    document.querySelector(`a[href="${href}"] svg`)), undefined, { timeout: 30_000 })
+  await dialog.locator('[data-venice-icon="mind-native"]').first().waitFor({ state: "visible", timeout: 10_000 })
+  const nativeIconMatches = await dialog.getByRole("navigation", { name: "Sync pages" }).evaluate((navigation) => {
+    const normalize = (value) => value.replace(/\s+/g, " ").trim().replace(/[zZ]$/, "")
+    const shapes = (svg) => svg ? [...svg.querySelectorAll("path,rect,circle,ellipse,line,polyline,polygon")].map((element) => ({
+      tag: element.tagName.toLowerCase(),
+      attributes: [...element.attributes].filter((attribute) => ["d", "x", "y", "x1", "x2", "y1", "y2", "width", "height", "rx", "ry", "r", "cx", "cy", "points", "transform"].includes(attribute.name))
+        .map((attribute) => [attribute.name, normalize(attribute.value)]).sort(([a], [b]) => a.localeCompare(b)),
+    })) : null
+    return [["Conversations", "/chat/classic"], ["Characters", "/character-chat"], ["Mind", "/minds"]].map(([label, href]) => {
+      const source = document.querySelector(`a[href="${href}"] svg`)
+      const button = [...navigation.querySelectorAll("button")].find((element) => element.textContent.trim() === label)
+      const rendered = button?.querySelector("svg")
+      return { label, sourceAvailable: !!source, matches: !!source && JSON.stringify(shapes(source)) === JSON.stringify(shapes(rendered)) }
+    })
+  })
+  assert.ok(nativeIconMatches.every((icon) => icon.matches), `Native Venice icon mismatch: ${JSON.stringify(nativeIconMatches)}`)
+  const overview = dialog.getByRole("region", { name: "Transfer overview" })
+  assert.equal(await overview.getByRole("region").count(), 4)
+  const borders = await overview.getByRole("region").evaluateAll((elements) => elements.map((element) => {
+    const style = getComputedStyle(element)
+    return { style: style.borderTopStyle, width: style.borderTopWidth }
+  }))
+  assert.ok(borders.every((border) => border.style === "solid" && border.width === "1px"), "Content card borders did not render inside the Shadow DOM.")
+  assert.equal(await dialog.getByTestId("runtime-handler").count(), 0)
+  assert.equal(await dialog.getByTestId("storage-result").count(), 0)
+  assert.equal(await dialog.getByTestId("conversation-list").count(), 0)
+  const results = path.join(root, "test-results")
+  await mkdir(results, { recursive: true })
+  await dialog.screenshot({ path: path.join(results, "tampermonkey-overview.png") })
+  for (const name of ["Library Assets"]) {
+    await navigatePanel(dialog, name)
+    await dialog.getByRole("heading", { name, exact: true }).waitFor({ state: "visible" })
+    assert.ok(await dialog.getByRole("button", { name: "Export coming soon", exact: true }).isDisabled())
+  }
+  await navigatePanel(dialog, "Characters")
+  await dialog.getByTestId("character-list").waitFor({ state: "visible", timeout: 45_000 })
+  assert.ok(await dialog.getByRole("button", { name: "Upload Character file", exact: true }).isVisible())
+  await navigatePanel(dialog, "Mind")
+  await dialog.getByTestId("mind-definition-list").waitFor({ state: "visible", timeout: 45_000 })
+  assert.ok(await dialog.getByRole("button", { name: "Upload Mind package", exact: true }).isVisible())
+  assert.equal(await dialog.getByRole("checkbox").count(), 0, "Mind export must include all contents without checkboxes.")
+  await openConversations(dialog)
+  assert.equal(await dialog.getByRole("group", { name: "Conversation type" }).count(), 0, "Conversation type tabs should be removed.")
+  await waitForMindHistory(dialog)
+  const kinds = await dialog.locator("[data-conversation-kind]").evaluateAll((rows) => rows.map((row) => ({
+    kind: row.getAttribute("data-conversation-kind"), icon: row.querySelector('[role="img"]')?.getAttribute("aria-label"),
+  })))
+  assert.ok(kinds.every((row) => row.icon === `${row.kind === "classic" ? "Classic" : row.kind === "mind" ? "Mind" : "Agentic"} conversation`))
+  const agenticGlyphs = await checkAgenticGlyphs(page, dialog)
+  const avatars = dialog.locator('[data-conversation-kind="mind"] img')
+  for (const avatar of await avatars.all()) {
+    assert.ok(await avatar.evaluate(async (image) => { await image.decode(); return image.naturalWidth > 0 }), "Mind conversation avatar did not decode.")
+  }
+  if (await dialog.locator('[data-conversation-kind="mind"]').count()) {
+    await dialog.screenshot({ path: path.join(results, "tampermonkey-conversation-avatars.png") })
+  }
+  await navigatePanel(dialog, "Overview")
+  const originalSize = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))
+  await page.setViewportSize({ width: 390, height: 844 })
+  await dialog.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  const mobile = await dialog.evaluate((element) => {
+    const box = element.getBoundingClientRect()
+    return { width: box.width, height: box.height, left: box.left, right: box.right, top: box.top, bottom: box.bottom, overflow: element.scrollWidth > element.clientWidth }
+  })
+  await dialog.screenshot({ path: path.join(results, "tampermonkey-mobile.png") })
+  assert.ok(mobile.left >= 0 && mobile.right <= 390 && mobile.top >= 0 && mobile.bottom <= 844, `Mobile dialog is outside the viewport: ${JSON.stringify(mobile)}`)
+  assert.equal(mobile.overflow, false, "Mobile dialog overflows horizontally.")
+  const mobileNavigationFits = await dialog.getByRole("navigation", { name: "Sync pages" }).evaluate((element) => {
+    const nav = element.getBoundingClientRect()
+    return Array.from(element.querySelectorAll("button")).every((button) => {
+      const box = button.getBoundingClientRect()
+      return box.left >= nav.left && box.right <= nav.right && box.top >= nav.top && box.bottom <= nav.bottom
+    })
+  })
+  assert.ok(mobileNavigationFits, "Mobile navigation clips a content page.")
+  await dialog.screenshot({ path: path.join(results, "tampermonkey-mobile.png") })
+  await page.setViewportSize(originalSize)
+  return { fourContentCategories: "passed", nativeCategoryIconShapes: "matched", nativeAgenticConversationGlyphsMatched: agenticGlyphs,
+    mindConversationAvatarsDecoded: await avatars.count(),
+    plannedExportPages: "passed", unifiedConversationListAndTypeIcons: "passed", fullMindWithoutCheckboxes: "passed", diagnosticsSeparated: "passed", mobileLayout: "passed" }
+}
+
+async function checkStorageOverview(page, dialog) {
+  await navigatePanel(dialog, "Details")
+  const details = dialog.getByTestId("storage-diagnostics")
+  if (await details.getAttribute("open") === null) await details.locator("summary").click()
+  const result = dialog.getByTestId("storage-result")
+  await result.waitFor({ state: "visible", timeout: 30_000 })
+  assert.equal(await dialog.getByRole("alert").count(), 0, "Storage reading reported errors.")
+  const expected = await page.evaluate(async () => {
+    let bytes = 0
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index)
+      if (key === null) throw new Error("localStorage changed during E2E validation.")
+      const value = localStorage.getItem(key)
+      if (value === null) throw new Error("localStorage changed during E2E validation.")
+      bytes += 2 * (key.length + value.length)
+    }
+    return { keys: localStorage.length, bytes, databases: await indexedDB.databases() }
+  })
+  assert.equal(
+    await result.getByTestId("local-storage-summary").innerText(),
+    `${expected.keys} keys; approximately ${expected.bytes} bytes (UTF-16 keys + values).`,
+  )
+  assert.equal(
+    await result.getByTestId("indexeddb-summary").innerText(),
+    `${expected.databases.length} databases`,
+  )
+  for (const database of expected.databases) {
+    assert.equal(
+      await result.getByRole("heading", { name: `${database.name} (v${database.version})`, exact: true }).count(),
+      1,
+    )
+  }
+  const previousRead = await result.getAttribute("data-read-at")
+  await dialog.getByRole("button", { name: "Refresh storage" }).click()
+  await dialog.locator(`[data-testid="storage-result"]:not([data-read-at="${previousRead}"])`)
+    .waitFor({ state: "visible", timeout: 30_000 })
+  assert.equal(await dialog.getByRole("alert").count(), 0)
+  return { localStorageKeys: expected.keys, indexedDBDatabases: expected.databases.length }
+}
+
+async function smokeTest(context) {
+  const page = await context.newPage()
+  await page.goto("https://venice.ai/chat/agent", {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  })
+  await waitForSignedInVenice(page)
+  await page.bringToFront()
+
+  const host = page.locator(`#${hostId}`)
+  const launcher = host.getByRole("button", {
+    name: "Venice Sync",
+    exact: true,
+  })
+  await launcher.waitFor({ state: "visible", timeout: 45_000 })
+  assert.equal(await host.count(), 1)
+  await launcher.click()
+
+  const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
+  await dialog.waitFor({ state: "visible" })
+  const webui = await checkPanelPages(page, dialog)
+  await navigatePanel(dialog, "Details")
+  assert.equal(await dialog.getByTestId("runtime-handler").innerText(), "Tampermonkey")
+  assert.equal(await dialog.getByTestId("runtime-mode").innerText(), "userscript")
+  assert.equal(await dialog.getByText("0.1.0", { exact: true }).count(), 1)
+
+  const storage = await checkStorageOverview(page, dialog)
+  const hostInput = page.locator("textarea").first()
+  if (await hostInput.count()) {
+    await hostInput.focus()
+    assert.ok(await dialog.isVisible(), "Host autofocus dismissed the non-modal dialog.")
+  }
+  const status = dialog.getByRole("status").filter({ hasText: "Dummy clicks:" })
+  await openUiDiagnostics(dialog)
+  assert.equal(await status.innerText(), "Dummy clicks: 0")
+  await dialog.getByRole("button", { name: "Test interaction" }).click()
+  await status.filter({ hasText: "Dummy clicks: 1" }).waitFor()
+  const styles = await dialog.evaluate((element) => {
+    const computed = getComputedStyle(element)
+    return {
+      background: computed.backgroundColor,
+      width: element.getBoundingClientRect().width,
+      insideShadow: element.getRootNode() instanceof ShadowRoot,
+      portalEscaped: !!document.querySelector('[data-slot="dialog-content"]'),
+    }
+  })
+  assert.ok(styles.insideShadow)
+  assert.equal(styles.portalEscaped, false)
+  assert.ok(styles.width > 250, "Dialog layout styles did not apply.")
+  if (await page.evaluate(() => innerWidth >= 1280)) assert.ok(styles.width >= 1100, "Desktop dialog was not enlarged.")
+  assert.notEqual(styles.background, "rgba(0, 0, 0, 0)")
+
+  const results = path.join(root, "test-results")
+  await mkdir(results, { recursive: true })
+  await dialog.screenshot({ path: path.join(results, "tampermonkey-details.png") })
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await closeWithPointerCheck(page, dialog)
+    await launcher.click()
+    await openUiDiagnostics(dialog)
+    await status.filter({ hasText: "Dummy clicks: 1" }).waitFor()
+  }
+  await page.keyboard.press("Escape")
+  await dialog.waitFor({ state: "hidden" })
+
+  await page.reload({ waitUntil: "domcontentloaded" })
+  await launcher.waitFor({ state: "visible", timeout: 45_000 })
+  assert.equal(await host.count(), 1)
+  await launcher.click()
+  await openUiDiagnostics(dialog)
+  await status.filter({ hasText: "Dummy clicks: 0" }).waitFor()
+  await checkStorageOverview(page, dialog)
+
+  return {
+    runtime: "Tampermonkey",
+    mode: "userscript",
+    version: "0.1.0",
+    webui,
+    counterInteraction: "passed",
+    storageOverview: "passed",
+    storageRefresh: "passed",
+    storage,
+    closeButtonPointerStability: "passed",
+    focusOutsideDismissalPrevented: true,
+    closeAndReopen: "passed",
+    escapeKey: "passed",
+    reloadReinjection: "passed",
+    singleHostAfterReload: "passed",
+    counterResetAfterReload: "passed",
+    styles,
+    scriptEvaluatedByPlaywright: false,
+    veniceStorageMetadataReadByTest: true,
+    veniceRecordContentsReadByTest: false,
+    veniceStorageWrittenByTest: false,
+    screenshot: "test-results/tampermonkey-overview.png",
+  }
+}
+
+async function classicCounts(page) {
+  return page.evaluate(async () => {
+    const database = await new Promise((resolve, reject) => {
+      const request = indexedDB.open("venice-db-encrypted")
+      request.onupgradeneeded = () => { request.transaction.abort(); reject(new Error("Classic database is missing.")) }
+      request.onerror = () => reject(request.error)
+      request.onsuccess = () => resolve(request.result)
+    })
+    try {
+      const names = ["conversations", "messages", "messageIds"]
+      const transaction = database.transaction(names, "readonly")
+      return await Promise.all(names.map((name) => new Promise((resolve, reject) => {
+        const request = transaction.objectStore(name).count()
+        request.onsuccess = () => resolve(request.result)
+        request.onerror = () => reject(request.error)
+      })))
+    } finally { database.close() }
+  })
+}
+
+async function cleanupSyntheticChats(page, ids) {
+  if (ids.length === 0) return
+  await page.evaluate(async (generatedIds) => {
+    const database = await new Promise((resolve, reject) => {
+      const request = indexedDB.open("venice-db-encrypted")
+      request.onupgradeneeded = () => { request.transaction.abort(); reject(new Error("Classic database is missing during cleanup.")) }
+      request.onerror = () => reject(request.error)
+      request.onsuccess = () => resolve(request.result)
+    })
+    try {
+      await new Promise((resolve, reject) => {
+        const transaction = database.transaction(["conversations", "messages", "messageIds"], "readwrite")
+        transaction.oncomplete = () => resolve()
+        transaction.onabort = () => reject(transaction.error ?? new Error("Synthetic fixture cleanup aborted."))
+        for (const id of generatedIds) {
+          transaction.objectStore("conversations").delete(id)
+          for (const name of ["messages", "messageIds"]) {
+            const store = transaction.objectStore(name)
+            const keys = store.index("conversationId").getAllKeys(id)
+            keys.onsuccess = () => { for (const key of keys.result) store.delete(key) }
+          }
+        }
+      })
+    } finally { database.close() }
+  }, ids)
+}
+
+async function importWithNativeRefresh(page, dialog, launcher, json, ids) {
+  const file = JSON.parse(json)
+  const previousIds = new Set(await dialog.locator("[data-conversation-id]").evaluateAll(
+    (elements) => elements.map((element) => element.getAttribute("data-conversation-id")),
+  ))
+  const previousUrl = page.url()
+  await dialog.getByLabel("Import conversation JSON").setInputFiles({
+    name: "venice-sync-test.json", mimeType: "application/json", buffer: Buffer.from(json),
+  })
+  await dialog.getByTestId("import-preview").waitFor({ state: "visible" })
+  const [navigation] = await Promise.all([
+    page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 60_000 }),
+    dialog.getByRole("button", { name: "Confirm import as new chat", exact: true }).click({ timeout: 60_000 }),
+  ])
+  assert.ok(navigation, "Import did not reload the native document.")
+  assert.equal(page.url(), previousUrl, "Import unexpectedly switched the current conversation.")
+  assert.equal(
+    await page.evaluate(() => performance.getEntriesByType("navigation")[0]?.type),
+    "reload",
+    "Import did not automatically reload the page.",
+  )
+
+  await launcher.click()
+  await openConversations(dialog)
+  await dialog.getByTestId("conversation-list").waitFor({ state: "visible", timeout: 30_000 })
+  const matchingIds = await dialog.locator("[data-conversation-id]").evaluateAll(
+    (elements, name) => elements
+      .filter((element) => element.querySelector("h3")?.textContent === name)
+      .map((element) => element.getAttribute("data-conversation-id")),
+    file.conversation.name,
+  )
+  const addedIds = matchingIds.filter((id) => !previousIds.has(id))
+  assert.equal(addedIds.length, 1, "Could not uniquely identify the new test conversation.")
+  const id = addedIds[0]
+  assert.match(id ?? "", /^[0-9a-f-]{36}$/i)
+  assert.ok(!ids.includes(id))
+  ids.push(id)
+
+  const nativeLink = page.locator(`a[href="/chat/classic/${id}"], a[href="/chat/${id}"]`).first()
+  await nativeLink.waitFor({ state: "visible", timeout: 30_000 })
+  assert.ok((await nativeLink.innerText()).includes(file.conversation.name), "Venice's native sidebar did not refresh.")
+  return { id, href: await nativeLink.getAttribute("href") }
+}
+
+async function conversationTransferTest(context) {
+  const page = await context.newPage()
+  await page.goto("https://venice.ai/chat/classic", { waitUntil: "domcontentloaded", timeout: 60_000 })
+  await waitForSignedInVenice(page)
+  await page.bringToFront()
+  const host = page.locator(`#${hostId}`)
+  const launcher = host.getByRole("button", { name: "Venice Sync", exact: true })
+  const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
+  await launcher.click()
+  await openConversations(dialog)
+  await dialog.getByTestId("conversation-list").waitFor({ state: "visible", timeout: 30_000 })
+  const baseline = await classicCounts(page)
+  const fixture = JSON.parse(await readFile(path.join(root, "scripts/fixtures/classic-conversation.json"), "utf8"))
+  fixture.conversation.name = `Venice Sync E2E ${Date.now()}`
+  const ids = []
+  try {
+    const importFile = (json) => importWithNativeRefresh(page, dialog, launcher, json, ids)
+    const first = await importFile(JSON.stringify(fixture))
+    assert.deepEqual(await classicCounts(page), baseline.map((count, index) => count + (index === 0 ? 1 : 2)))
+    const downloadReady = page.waitForEvent("download")
+    await dialog.locator(`[data-conversation-id="${first.id}"]`).getByRole("button", { name: "Export JSON" }).click()
+    const download = await downloadReady
+    const saved = path.join(root, "test-results/round-trip-conversation.json")
+    await download.saveAs(saved)
+    const exportedJson = await readFile(saved, "utf8")
+    await download.delete()
+    const exported = JSON.parse(exportedJson)
+    assert.equal(exported.format, "venice-sync-classic")
+    assert.equal(exported.version, 1)
+    assert.equal(exported.conversation.name, fixture.conversation.name)
+    assert.equal(exported.conversation.ownerId, undefined)
+    assert.deepEqual(
+      exported.messages.map(({ role, content, createdAtUnixTimestamp, updatedAtUnixTimestamp }) => ({ role, content, createdAtUnixTimestamp, updatedAtUnixTimestamp })),
+      fixture.messages.map(({ role, content, createdAtUnixTimestamp, updatedAtUnixTimestamp }) => ({ role, content, createdAtUnixTimestamp, updatedAtUnixTimestamp })),
+    )
+    assert.ok(exported.messages.every((message) => message.conversationId === first.id))
+    assert.ok(exported.messages.every((message) => !fixture.messages.some((source) => source.id === message.id)))
+    await dialog.screenshot({ path: path.join(root, "test-results/tampermonkey-conversation-transfer.png") })
+    await page.goto(`https://venice.ai${first.href}`, { waitUntil: "domcontentloaded" })
+    for (const message of fixture.messages) {
+      await page.getByText(message.content, { exact: true }).waitFor({ state: "visible", timeout: 45_000 })
+    }
+    await page.reload({ waitUntil: "domcontentloaded" })
+    for (const message of fixture.messages) {
+      await page.getByText(message.content, { exact: true }).waitFor({ state: "visible", timeout: 45_000 })
+    }
+    await launcher.click()
+    await openConversations(dialog)
+    await dialog.getByTestId("conversation-list").waitFor({ state: "visible" })
+    await importFile(exportedJson)
+    assert.deepEqual(await classicCounts(page), baseline.map((count, index) => count + (index === 0 ? 2 : 4)))
+  } finally {
+    await cleanupSyntheticChats(page, ids)
+    assert.deepEqual(await classicCounts(page), baseline, "Synthetic fixture cleanup did not restore original counts.")
+    await page.goto("https://venice.ai/chat/classic", { waitUntil: "domcontentloaded" })
+  }
+  return {
+    importPreview: "passed", atomicNativeImport: "passed", jsonDownload: "passed",
+    nativeSidebarAutoRefresh: "passed", importReloadPreservesCurrentUrl: "passed",
+    plaintextContentAndRolesRoundTrip: "passed", nativeVeniceRenderingAfterReload: "passed",
+    reimportCreatesNewChat: "passed", syntheticFixtureCleanup: "passed",
+    existingChatsModified: false, inferenceRequestsSent: false,
+    scriptEvaluatedByPlaywright: false,
+  }
+}
+
+async function selectedConversationTest(context, id) {
+  assert.match(id, /^[a-zA-Z0-9_-]+$/, "Invalid test conversation ID.")
+  const page = await context.newPage()
+  await page.goto(`https://venice.ai/chat/classic/${id}`, { waitUntil: "domcontentloaded" })
+  await waitForSignedInVenice(page)
+  await page.bringToFront()
+  const host = page.locator(`#${hostId}`)
+  const launcher = host.getByRole("button", { name: "Venice Sync", exact: true })
+  const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
+  await launcher.click()
+  await openConversations(dialog)
+  await dialog.getByTestId("conversation-list").waitFor({ state: "visible", timeout: 30_000 })
+  const fingerprint = () => page.evaluate(async (conversationId) => {
+    const database = await new Promise((resolve, reject) => {
+      const request = indexedDB.open("venice-db-encrypted")
+      request.onupgradeneeded = () => { request.transaction.abort(); reject(new Error("Missing Classic database.")) }
+      request.onerror = () => reject(request.error)
+      request.onsuccess = () => resolve(request.result)
+    })
+    try {
+      const transaction = database.transaction(["conversations", "messages", "messageIds"], "readonly")
+      const requests = [
+        transaction.objectStore("conversations").get(conversationId),
+        transaction.objectStore("messages").index("conversationId").getAll(conversationId),
+        transaction.objectStore("messageIds").index("conversationId").getAll(conversationId),
+      ]
+      const values = await Promise.all(requests.map((request) => new Promise((resolve, reject) => {
+        request.onsuccess = () => resolve(request.result)
+        request.onerror = () => reject(request.error)
+      })))
+      if (!values[0]) throw new Error("Selected conversation is missing.")
+      const serialized = JSON.stringify(values)
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(serialized))
+      return {
+        sha256: Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""),
+        messages: values[1].length,
+      }
+    } finally { database.close() }
+  }, id)
+  const downloadConversation = async (conversationId) => {
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      dialog.locator(`[data-conversation-id="${conversationId}"]`).getByRole("button", { name: "Export JSON" }).click(),
+    ]).catch(async (error) => {
+      const alerts = await dialog.locator('[role="alert"]').allTextContents()
+      throw new Error(
+        alerts.length ? `Userscript export failed: ${alerts.join("; ")}` : "Chrome did not start the conversation JSON download.",
+        { cause: error },
+      )
+    })
+    try {
+      const stream = await download.createReadStream()
+      assert.ok(stream, "Conversation download has no readable stream.")
+      const chunks = []
+      for await (const chunk of stream) chunks.push(chunk)
+      return JSON.parse(Buffer.concat(chunks).toString("utf8"))
+    } finally { await download.delete() }
+  }
+  const messageDigest = (messages) => {
+    const canonical = (value) => Array.isArray(value) ? value.map(canonical) :
+      value && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => [key, canonical(entry)])) : value
+    const normalized = messages.map((message) => {
+      const result = { ...message }
+      delete result.id
+      delete result.conversationId
+      delete result.ownerId
+      return result
+    })
+    return createHash("sha256").update(JSON.stringify(canonical(normalized))).digest("hex")
+  }
+  const baseline = await classicCounts(page)
+  const originalFingerprint = await fingerprint()
+  const original = await downloadConversation(id)
+  assert.equal(original.messages.length, originalFingerprint.messages)
+  const expectedMessages = messageDigest(original.messages)
+  const ids = []
+  try {
+    const file = { ...original, conversation: { ...original.conversation, name: `${original.conversation.name} [Venice Sync test copy]` } }
+    const { id: copyId, href } = await importWithNativeRefresh(page, dialog, launcher, JSON.stringify(file), ids)
+    assert.notEqual(copyId, id)
+    const copy = await downloadConversation(copyId)
+    assert.equal(messageDigest(copy.messages), expectedMessages, "Copied message data differs from the original export.")
+    assert.equal(copy.conversation.name, file.conversation.name)
+    assert.equal(copy.conversation.modelId, original.conversation.modelId)
+    const userMessage = original.messages.find((message) => message.role === "user")
+    assert.ok(userMessage, "Selected test chat has no user message to check in native Venice.")
+    await page.goto(`https://venice.ai${href}`, { waitUntil: "domcontentloaded" })
+    await page.getByText(userMessage.content, { exact: true }).first().waitFor({ state: "visible", timeout: 45_000 })
+  } finally {
+    await cleanupSyntheticChats(page, ids)
+    assert.deepEqual(await classicCounts(page), baseline)
+    assert.deepEqual(await fingerprint(), originalFingerprint, "Original conversation changed during testing.")
+    await page.goto("https://venice.ai/chat/classic", { waitUntil: "domcontentloaded" })
+  }
+  return {
+    exportedMessages: originalFingerprint.messages,
+    exportAndCopyImport: "passed", copiedMessageDataDigest: "matched",
+    nativeSidebarAutoRefresh: "passed", importReloadPreservesCurrentUrl: "passed",
+    nativeImportedPromptVisible: "passed", originalRecordFingerprint: "unchanged",
+    testCopyCleanup: "passed", originalChatModified: false,
+    chatContentsLoggedOrRetainedByTest: false,
+  }
+}
+
+async function mindStorageSnapshot(page, cleanup = [], expectedPrefix = "", selectedId = "") {
+  return page.evaluate(async ({ cleanup, expectedPrefix, selectedId }) => {
+    const registry = await new Promise((resolve, reject) => {
+      const id = `venice-sync-test-registry-${crypto.randomUUID()}`, chunk = `venice-sync/${id}.js`
+      const timer = setTimeout(() => reject(new Error("Native RxDB test registry timed out.")), 5000)
+      try {
+        globalThis.TURBOPACK.push([chunk, id, (runtime) => {
+          try { clearTimeout(timer); resolve(runtime.r(947217).OPEN_COLLECTIONS) } catch (error) { reject(error) }
+        }])
+        Promise.resolve(globalThis.TURBOPACK.push([chunk, { otherChunks: [], runtimeModuleIds: [id] }])).catch(reject)
+      } catch (error) { clearTimeout(timer); reject(error) }
+    })
+    const get = (name, version) => {
+      const values = [...registry].filter((collection) => !collection.closed && collection.database.name === "venice-rx-db-encrypted" && collection.name === name &&
+        (collection.schema.version === version || (name === "mindConversations" && collection.schema.version === 5)))
+      if (values.length !== 1) throw new Error("Ambiguous native Mind test collection.")
+      return values[0]
+    }
+    const definitions = get("minds", 25), conversations = get("mindConversations", 4), messages = get("mindMessages", 25)
+    for (const id of cleanup) {
+      const conversation = await conversations.findOne(id).exec()
+      if (!conversation || !expectedPrefix || !conversation.name.startsWith(expectedPrefix)) throw new Error("Refusing to clean an unverified Mind test record.")
+      const records = await messages.find({ selector: { mind_conversation_id: id } }).exec()
+      if (records.some((record) => record.owner_id !== conversation.ownerId)) throw new Error("Unexpected ownership during Mind test cleanup.")
+      const removed = await messages.bulkRemove(records.map((record) => record.id))
+      if (removed.error.length) throw new Error("Could not clean generated Mind test messages.")
+      const removedConversation = await conversations.bulkRemove([id])
+      if (removedConversation.error.length) throw new Error("Could not clean the generated Mind test conversation.")
+    }
+    const minds = await definitions.find({ selector: {} }).exec()
+    const bytes = new TextEncoder().encode(JSON.stringify(minds.map((mind) => mind.toJSON()).sort((a, b) => a.id.localeCompare(b.id))))
+    const digest = await crypto.subtle.digest("SHA-256", bytes)
+    let selected
+    if (selectedId) {
+      const conversation = await conversations.findOne(selectedId).exec()
+      if (!conversation || conversation.type !== "chat" || conversation.mindId || conversation.remoteMindId || conversation.studioProjectId) {
+        throw new Error("The selected Agentic test conversation is missing or bound to another content type.")
+      }
+      const records = (await messages.find({ selector: { mind_conversation_id: selectedId } }).exec()).map((record) => record.toJSON()).sort((a, b) => a.id.localeCompare(b.id))
+      const bytes = new TextEncoder().encode(JSON.stringify({ conversation: conversation.toJSON(), messages: records }))
+      const digest = await crypto.subtle.digest("SHA-256", bytes)
+      selected = { messageCount: records.length, fingerprint: Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("") }
+    }
+    return {
+      definitionFingerprint: Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""),
+      conversations: (await conversations.find({ selector: {} }).exec()).length,
+      messages: (await messages.find({ selector: {} }).exec()).length,
+      ...(selected ? { selected } : {}),
+    }
+  }, { cleanup, expectedPrefix, selectedId })
+}
+
+async function mindHistoryTransferTest(context, agentic = false) {
+  const page = await context.newPage()
+  await page.goto("https://venice.ai/chat/agent", { waitUntil: "domcontentloaded" })
+  await waitForSignedInVenice(page)
+  await page.bringToFront()
+  const host = page.locator(`#${hostId}`)
+  const launcher = host.getByRole("button", { name: "Venice Sync", exact: true })
+  const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
+  const openMind = async () => {
+    await openConversations(dialog)
+    await waitForMindHistory(dialog)
+  }
+  await launcher.click()
+  await openMind()
+  const baseline = await mindStorageSnapshot(page)
+  const fixture = JSON.parse(await readFile(path.join(root, "scripts/fixtures/mind-conversation.json"), "utf8"))
+  if (agentic) {
+    fixture.format = "venice-sync-agentic-conversation"
+    delete fixture.conversation.mindId
+  }
+  fixture.conversation.name = `Venice Sync ${agentic ? "Agentic" : "Mind"} E2E ${Date.now()}`
+  const prefix = fixture.conversation.name
+  const ids = []
+  const documentOrigin = await page.evaluate(() => performance.timeOrigin)
+  const initialUrl = page.url()
+  const importFile = async (json) => {
+    await dialog.getByLabel("Import conversation JSON", { exact: true }).setInputFiles({
+      name: "mind-history-test.json", mimeType: "application/json", buffer: Buffer.from(json),
+    })
+    await dialog.getByTestId(agentic ? "agentic-import-preview" : "mind-import-preview").waitFor()
+    if (!agentic) {
+      const select = dialog.getByRole("combobox", { name: "Destination Mind" })
+      const option = select.locator('option[value^="local:"]').first()
+      const value = await option.getAttribute("value")
+      assert.ok(value, "A local Mind is required for the opt-in Mind history test.")
+      await select.selectOption(value)
+    } else assert.equal(await dialog.getByRole("combobox", { name: "Destination Mind" }).count(), 0)
+    await dialog.getByRole("button", { name: agentic ? "Confirm Agentic history import" : "Confirm Mind history import", exact: true }).click()
+    const link = dialog.getByTestId(agentic ? "imported-agentic-chat-link" : "imported-mind-chat-link")
+    await link.waitFor({ state: "visible" })
+    const href = await link.getAttribute("href")
+    const id = href?.split("/").at(-1)
+    assert.match(id ?? "", /^[0-9a-f-]{36}$/i)
+    assert.ok(!ids.includes(id))
+    ids.push(id)
+    await dialog.locator(`[data-conversation-id="${id}"][data-conversation-kind="${agentic ? "agentic" : "mind"}"]`).waitFor()
+    await page.waitForFunction((href) => [...document.querySelectorAll("a[href]")].some((anchor) =>
+      anchor.getAttribute("href") === href && anchor.getClientRects().length > 0), href, { timeout: 30_000 })
+    return { id, href }
+  }
+  const messageShape = (messages) => messages.map((message) => ({
+    role: message.role, status: message.status,
+    created: message.created_at_unix_timestamp, updated: message.updated_at_unix_timestamp,
+    items: message.output_items.map((item) => ({
+      type: item.type, content: item.content.map((part) => ({ type: part.type, text: part.text, refusal: part.refusal })),
+    })),
+  }))
+  try {
+    const first = await importFile(JSON.stringify(fixture))
+    if (agentic) await checkAgenticGlyphs(page, dialog)
+    assert.equal(page.url(), initialUrl)
+    assert.equal(await page.evaluate(() => performance.timeOrigin), documentOrigin, "Mind import unexpectedly reloaded the page.")
+    const ready = page.waitForEvent("download")
+    await dialog.locator(`[data-conversation-id="${first.id}"][data-conversation-kind="${agentic ? "agentic" : "mind"}"]`).getByRole("button", { name: agentic ? "Export Agentic JSON" : "Export Mind JSON" }).click()
+    const download = await ready
+    const file = path.join(root, `test-results/${agentic ? "agentic" : "mind"}-history-round-trip.json`)
+    await download.saveAs(file)
+    const exportedJson = await readFile(file, "utf8")
+    await download.delete()
+    const exported = JSON.parse(exportedJson)
+    assert.equal(exported.format, agentic ? "venice-sync-agentic-conversation" : "venice-sync-mind-conversation")
+    if (agentic) {
+      assert.equal(exported.conversation.mindId, undefined)
+      assert.equal(exported.conversation.remoteMindId, undefined)
+    }
+    assert.deepEqual(messageShape(exported.messages), messageShape(fixture.messages))
+    assert.equal(exported.conversation.ownerId, undefined)
+    assert.ok(exported.messages.every((message) => message.owner_id === undefined && message.mind_conversation_id === first.id))
+    await importFile(exportedJson)
+    assert.equal(await page.evaluate(() => performance.timeOrigin), documentOrigin)
+    await dialog.screenshot({ path: path.join(root, `test-results/tampermonkey-${agentic ? "agentic" : "mind"}-history.png`) })
+    await page.goto(`https://venice.ai${first.href}`, { waitUntil: "domcontentloaded" })
+    for (const text of [fixture.messages[0].output_items[0].content[0].text, fixture.messages[1].output_items[1].content[0].text]) {
+      await page.getByText(text, { exact: true }).first().waitFor({ state: "visible", timeout: 45_000 })
+    }
+    await page.reload({ waitUntil: "domcontentloaded" })
+    await page.getByText(fixture.messages[1].output_items[1].content[0].text, { exact: true }).first().waitFor({ state: "visible", timeout: 45_000 })
+  } finally {
+    const restored = await mindStorageSnapshot(page, ids, prefix)
+    assert.deepEqual(restored, baseline, "Mind test cleanup changed existing data or definitions.")
+    await page.goto("https://venice.ai/chat/agent", { waitUntil: "domcontentloaded" })
+  }
+  return {
+    ...(agentic ? { previewWithoutMindDestination: "passed" } : { previewAndDestinationSelection: "passed" }), nativeRxDBImport: "passed",
+    structuredTextAndReasoningRoundTrip: "passed", nativeSidebarUpdatedWithoutReload: "passed",
+    nativeMessagesRenderedAfterReload: "passed", reimportCreatesNewCopy: "passed",
+    mindDefinitionFingerprint: "unchanged", existingHistoryCounts: "unchanged", fixtureCleanup: "passed",
+    scriptEvaluatedByPlaywright: false, inferenceRequestsSubmittedByTest: false,
+  }
+}
+
+async function selectedAgenticConversationTest(context, id) {
+  assert.match(id, /^[\w-]{1,100}$/)
+  const page = await context.newPage()
+  await page.goto(`https://venice.ai/chat/agent/${id}`, { waitUntil: "domcontentloaded" })
+  await waitForSignedInVenice(page)
+  await page.bringToFront()
+  const host = page.locator(`#${hostId}`)
+  const launcher = host.getByRole("button", { name: "Venice Sync", exact: true })
+  const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
+  await launcher.click()
+  await openConversations(dialog)
+  const baseline = await mindStorageSnapshot(page, [], "", id)
+  const downloadArchive = async (conversationId) => {
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      dialog.locator(`[data-conversation-id="${conversationId}"][data-conversation-kind="agentic"]`)
+        .getByRole("button", { name: "Export Agentic JSON", exact: true }).click(),
+    ]).catch(async (error) => {
+      const alerts = await dialog.getByRole("alert").allTextContents()
+      throw new Error(alerts.length ? `Agentic export failed: ${alerts.join("; ")}` : "Agentic download did not start.", { cause: error })
+    })
+    try {
+      const stream = await download.createReadStream()
+      assert.ok(stream)
+      const chunks = []
+      for await (const chunk of stream) chunks.push(chunk)
+      return JSON.parse(Buffer.concat(chunks).toString("utf8"))
+    } finally { await download.delete() }
+  }
+  const digest = (messages) => {
+    const idFields = new Set(["id", "mind_conversation_id", "owner_id", "turn_id", "item_id", "response_id"])
+    const normalize = (value) => Array.isArray(value) ? value.map(normalize) : value && typeof value === "object" ?
+      Object.fromEntries(Object.entries(value).filter(([key]) => !idFields.has(key)).sort(([a], [b]) => a.localeCompare(b)).map(([key, entry]) => [key, normalize(entry)])) : value
+    return createHash("sha256").update(JSON.stringify(normalize(messages))).digest("hex")
+  }
+  const original = await downloadArchive(id)
+  assert.equal(original.format, "venice-sync-agentic-conversation")
+  assert.equal(original.messages.length, baseline.selected.messageCount)
+  assert.equal(original.conversation.mindId, undefined)
+  assert.equal(original.conversation.remoteMindId, undefined)
+  const prefix = `${original.conversation.name} [Venice Sync Agentic test copy]`
+  const copy = { ...original, conversation: { ...original.conversation, name: prefix } }
+  const ids = [], requests = []
+  page.on("request", (request) => {
+    if (request.method() !== "GET" && /(?:\/(?:inference|publish|responses|completions)(?:\/|$)|mind.*(?:chat|stream|infer|publish))/i.test(new URL(request.url()).pathname)) {
+      requests.push(new URL(request.url()).pathname)
+    }
+  })
+  try {
+    const timeOrigin = await page.evaluate(() => performance.timeOrigin)
+    await dialog.getByLabel("Import conversation JSON", { exact: true }).setInputFiles({
+      name: "user-agentic-copy.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(copy)),
+    })
+    await dialog.getByTestId("agentic-import-preview").waitFor({ state: "visible" })
+    assert.equal(await dialog.getByRole("combobox").count(), 0)
+    await dialog.getByRole("button", { name: "Confirm Agentic history import", exact: true }).click()
+    const link = dialog.getByTestId("imported-agentic-chat-link")
+    await link.waitFor({ state: "visible", timeout: 30_000 })
+    const href = await link.getAttribute("href")
+    const copyId = href?.split("/").at(-1)
+    assert.match(copyId ?? "", /^[a-f0-9-]{36}$/)
+    assert.notEqual(copyId, id)
+    ids.push(copyId)
+    await dialog.locator(`[data-conversation-id="${copyId}"]`).waitFor()
+    await page.waitForFunction((href) => [...document.querySelectorAll("a[href]")].some((anchor) =>
+      anchor.getAttribute("href") === href && anchor.getClientRects().length > 0), href, { timeout: 30_000 })
+    assert.equal(await page.evaluate(() => performance.timeOrigin), timeOrigin)
+    const restored = await downloadArchive(copyId)
+    assert.equal(digest(restored.messages), digest(original.messages), "Agentic copy changed the stored message data.")
+    assert.equal(restored.conversation.name, prefix)
+    await page.goto(`https://venice.ai${href}`, { waitUntil: "domcontentloaded" })
+    const text = original.messages.find((message) => message.role === "user")?.output_items
+      .find((item) => item.type === "message")?.content.find((part) => part.type === "output_text")?.text
+    assert.equal(typeof text, "string", "The selected source has no user text for native-render verification.")
+    await page.waitForFunction((text) => [...document.querySelectorAll("p,div,span")].some((element) =>
+      element.textContent === text && element.getClientRects().length > 0), text, { timeout: 45_000 })
+    await page.reload({ waitUntil: "domcontentloaded" })
+    await page.waitForFunction((text) => [...document.querySelectorAll("p,div,span")].some((element) =>
+      element.textContent === text && element.getClientRects().length > 0), text, { timeout: 45_000 })
+    assert.equal(requests.length, 0)
+  } finally {
+    assert.deepEqual(await mindStorageSnapshot(page, ids, prefix, id), baseline, "Agentic test did not preserve original records.")
+    await page.goto("https://venice.ai/chat/agent", { waitUntil: "domcontentloaded" })
+  }
+  return {
+    exportedMessages: baseline.selected.messageCount, exportImportReexportMessageData: "matched",
+    newIndependentChatWithoutMindBinding: "passed", nativeSidebarUpdatedWithoutReload: "passed",
+    nativeContentVisibleAfterReload: "passed", originalFingerprint: "unchanged",
+    testCopyCleanup: "passed", inferenceOrPublishRequests: 0, privateChatContentsRetainedByTest: false,
+  }
+}
+
+async function packageDatabaseState(page, cleanup = [], expectedPrefix = "") {
+  return page.evaluate(async ({ cleanup, expectedPrefix }) => {
+    const registry = await new Promise((resolve, reject) => {
+      const id = `venice-sync-package-test-${crypto.randomUUID()}`, chunk = `venice-sync/${id}.js`
+      const timer = setTimeout(() => reject(new Error("Native package test registry timed out.")), 5000)
+      try {
+        globalThis.TURBOPACK.push([chunk, id, (runtime) => {
+          try { clearTimeout(timer); resolve(runtime.r(947217).OPEN_COLLECTIONS) } catch (error) { reject(error) }
+        }])
+        Promise.resolve(globalThis.TURBOPACK.push([chunk, { otherChunks: [], runtimeModuleIds: [id] }])).catch(reject)
+      } catch (error) { clearTimeout(timer); reject(error) }
+    })
+    const names = ["minds", "mindConversations", "mindMessages", "mindAttachments", "mindMedia"]
+    const ports = Object.fromEntries(names.map((name) => {
+      const matches = [...registry].filter((collection) => !collection.closed && collection.database.name === "venice-rx-db-encrypted" && collection.name === name)
+      if (matches.length !== 1) throw new Error("Ambiguous native package test collection.")
+      return [name, matches[0]]
+    }))
+    const root = await navigator.storage.getDirectory()
+    for (const id of cleanup) {
+      if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error("Unsafe generated fixture ID.")
+      const mind = await ports.minds.findOne(id).exec()
+      if (!mind || !expectedPrefix || !mind.name.startsWith(expectedPrefix)) throw new Error("Refusing to delete an unverified test Mind.")
+      for (const conversationId of [`mind-maker-conv:${id}`, `mind-preview-conv:${id}`]) {
+        for (const name of ["mindMessages", "mindAttachments", "mindMedia"]) {
+          const field = name === "mindMessages" ? "mind_conversation_id" : "mindConversationId"
+          const docs = await ports[name].find({ selector: { [field]: conversationId } }).exec()
+          if (docs.some((document) => (name === "mindMessages" ? document.owner_id : document.ownerId) !== mind.ownerId)) throw new Error("Unexpected test-record ownership.")
+          if (docs.length && (await ports[name].bulkRemove(docs.map((document) => document.id))).error.length) throw new Error("Could not clean test history.")
+        }
+        const history = await ports.mindConversations.findOne(conversationId).exec()
+        if (history && (await ports.mindConversations.bulkRemove([conversationId])).error.length) throw new Error("Could not clean test conversation.")
+      }
+      if ((await ports.minds.bulkRemove([id])).error.length) throw new Error("Could not clean test definition.")
+      for (const [parentName, child] of [["minds", id], ["media", `mind-maker-conv:${id}`], ["media", `mind-preview-conv:${id}`]]) {
+        try {
+          const parent = await root.getDirectoryHandle(parentName)
+          await parent.removeEntry(child, { recursive: true })
+        } catch (error) { if (error.name !== "NotFoundError") throw error }
+      }
+    }
+    const state = {}
+    for (const name of names) {
+      const docs = (await ports[name].find({ selector: {} }).exec()).map((document) => document.toJSON()).sort((a, b) => a.id.localeCompare(b.id))
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(docs)))
+      state[name] = { count: docs.length, fingerprint: Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("") }
+    }
+    return state
+  }, { cleanup, expectedPrefix })
+}
+
+async function completeMindPackageTest(context) {
+  const page = await context.newPage()
+  await page.goto("https://venice.ai/chat/agent", { waitUntil: "domcontentloaded" })
+  await waitForSignedInVenice(page)
+  await page.bringToFront()
+  const host = page.locator(`#${hostId}`)
+  const launcher = host.getByRole("button", { name: "Venice Sync", exact: true })
+  const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
+  const openPackages = async () => {
+    await launcher.click()
+    await navigatePanel(dialog, "Mind")
+    await dialog.getByTestId("mind-definition-list").waitFor({ state: "visible", timeout: 45_000 })
+  }
+  await openPackages()
+  const baseline = await packageDatabaseState(page)
+  const fixture = syntheticMindPackage(`Venice Sync package E2E ${Date.now()}`)
+  const prefix = fixture.manifest.definition.name
+  const ids = [], requests = []
+  page.on("request", (request) => {
+    if (request.method() !== "GET" && /(?:\/(?:inference|publish|responses|completions)(?:\/|$)|mind.*(?:chat|stream|infer|publish))/i.test(new URL(request.url()).pathname)) {
+      requests.push(new URL(request.url()).pathname)
+    }
+  })
+  const importZip = async (bytes) => {
+    await dialog.getByLabel("Import Mind package", { exact: true }).setInputFiles({
+      name: "mind-complete-test.zip", mimeType: "application/zip", buffer: Buffer.from(bytes),
+    })
+    await dialog.getByTestId("mind-package-preview").waitFor({ state: "visible" })
+    assert.ok((await dialog.getByTestId("mind-package-preview").innerText()).includes("5 files"))
+    await dialog.getByRole("button", { name: "Confirm import as new Mind", exact: true }).click()
+    const result = await Promise.race([
+      dialog.getByTestId("imported-mind-definition-link").waitFor({ state: "visible", timeout: 45_000 }).then(() => "success"),
+      dialog.getByRole("region", { name: "Mind definition transfer", exact: true }).getByRole("alert").waitFor({ state: "visible", timeout: 45_000 }).then(() => "error"),
+    ])
+    if (result === "error") throw new Error(`Mind package UI: ${await dialog.getByRole("region", { name: "Mind definition transfer", exact: true }).getByRole("alert").innerText()}`)
+    const href = await dialog.getByTestId("imported-mind-definition-link").getAttribute("href")
+    const id = href?.split("/")[3]
+    assert.match(id ?? "", /^[a-f0-9-]{36}$/)
+    ids.push(id)
+    await dialog.locator(`[data-mind-definition-id="${id}"]`).waitFor()
+    const avatar = dialog.locator(`[data-mind-definition-id="${id}"]`).getByRole("img", { name: `${prefix} avatar`, exact: true })
+    await avatar.waitFor({ state: "visible", timeout: 15_000 })
+    assert.ok(await avatar.evaluate(async (image) => { await image.decode(); return image.complete && image.naturalWidth > 0 }), "Local Mind avatar did not decode.")
+    return { id, href }
+  }
+  const downloadZip = async (id) => {
+    const ready = page.waitForEvent("download")
+    await dialog.locator(`[data-mind-definition-id="${id}"]`).getByRole("button", { name: "Export Mind package", exact: true }).click()
+    const download = await ready
+    try {
+      const stream = await download.createReadStream()
+      assert.ok(stream)
+      const chunks = []
+      for await (const chunk of stream) chunks.push(chunk)
+      return Buffer.concat(chunks)
+    } finally { await download.delete() }
+  }
+  const verify = (zip, id) => {
+    const entries = unzipSync(zip)
+    const manifest = JSON.parse(strFromU8(entries["manifest.json"]))
+    assert.equal(manifest.definition.id, id)
+    assert.equal(manifest.definition.name, prefix)
+    assert.deepEqual(manifest.definition.systemPrompt, fixture.manifest.definition.systemPrompt)
+    assert.deepEqual(manifest.definition.tools, fixture.manifest.definition.tools)
+    assert.equal(manifest.definition.ownerId, undefined)
+    assert.equal(manifest.definition.remoteId, undefined)
+    assert.equal(manifest.files.length, 5, `Unexpected synthetic package files: ${manifest.files.map((file) => `${file.scope}/${file.path}`).join(", ")}`)
+    assert.equal(manifest.assistant.conversation.id, `mind-maker-conv:${id}`)
+    assert.equal(manifest.preview.conversation.id, `mind-preview-conv:${id}`)
+    const calls = manifest.assistant.messages[0].output_items
+    assert.ok(calls.some((item) => item.type === "functionCall" && item.name === "update_mind" && item.status === "completed"))
+    const call = calls.find((item) => item.type === "functionCall")
+    const output = calls.find((item) => item.type === "functionCallOutput")
+    assert.equal(call.call_id, output.call_id)
+    assert.notEqual(call.call_id, "builder-call-id")
+    assert.equal(manifest.preview.attachments.length, 1)
+    assert.equal(manifest.preview.media.length, 1)
+    const content = manifest.preview.messages[0].output_items[0].content
+    assert.equal(content.find((part) => part.type === "input_file").media_id, manifest.preview.attachments[0].id)
+    assert.equal(content.find((part) => part.type === "input_image").media_id, manifest.preview.media[0].id)
+    assert.equal(manifest.preview.attachments[0].mindMessageId, manifest.preview.messages[0].id)
+    const expectedHashes = fixture.manifest.files.map((file) => file.sha256).sort()
+    const actualHashes = manifest.files.map((file) => {
+      const bytes = entries[`files/${file.scope}/${file.path}`]
+      assert.ok(bytes)
+      const hash = createHash("sha256").update(bytes).digest("hex")
+      assert.equal(hash, file.sha256)
+      return hash
+    }).sort()
+    assert.deepEqual(actualHashes, expectedHashes)
+    return manifest
+  }
+  try {
+    const first = await importZip(fixture.zip)
+    const exported = await downloadZip(first.id)
+    verify(exported, first.id)
+    await importZip(exported)
+    await dialog.screenshot({ path: path.join(root, "test-results/tampermonkey-mind-package.png") })
+    await page.goto(`https://venice.ai${first.href}`, { waitUntil: "domcontentloaded" })
+    await waitForSignedInVenice(page)
+    await page.getByText("Synthetic Builder history restored without replaying edits.", { exact: true }).first().waitFor({ state: "visible", timeout: 45_000 })
+    const previewTab = page.getByRole("tab", { name: /^(Mind preview|Mind 预览|Preview|预览)$/ })
+    if (await previewTab.count()) {
+      await previewTab.click()
+      await page.getByText("Synthetic Preview history restored with its reference attachment.", { exact: true }).first().waitFor({ state: "visible", timeout: 30_000 })
+    } else throw new Error("Native Mind editor Preview tab is unavailable.")
+    await page.reload({ waitUntil: "domcontentloaded" })
+    await waitForSignedInVenice(page)
+    await openPackages()
+    const afterEditor = await downloadZip(first.id)
+    verify(afterEditor, first.id)
+    assert.equal(requests.length, 0, "Restoring/opening history triggered an inference or publishing request.")
+  } finally {
+    assert.deepEqual(await packageDatabaseState(page, ids, prefix), baseline, "Mind package cleanup changed existing data.")
+    await page.goto("https://venice.ai/chat/agent", { waitUntil: "domcontentloaded" })
+  }
+  return {
+    definitionAndSubAgents: "passed", avatarCoverAndReferenceFiles: "passed",
+    builderToolsPreservedWithoutReplay: "passed", previewAttachmentAndImage: "passed",
+    nestedReferencesRemapped: "passed", exportImportReexportHashes: "matched",
+    nativeEditorAssistantAndPreview: "passed", unpublishedFreshCopy: "passed",
+    localMindAvatarRendered: "passed", exportIncludesAllWithoutCheckboxes: "passed",
+    existingRecordsFingerprints: "unchanged", generatedRecordsAndFilesCleanup: "passed",
+    inferenceOrPublishRequests: 0, scriptEvaluatedByPlaywright: false,
+  }
+}
+
+async function characterStorageState(page, cleanup = [], expectedPrefix = "", sourceId = "") {
+  return page.evaluate(async ({ cleanup, expectedPrefix, sourceId }) => {
+    const api = await new Promise((resolve, reject) => {
+      const id = `venice-sync-character-test-${crypto.randomUUID()}`, chunk = `venice-sync/${id}.js`
+      const timer = setTimeout(() => reject(new Error("Native Character test bridge timed out.")), 5000)
+      try {
+        globalThis.TURBOPACK.push([chunk, id, (runtime) => {
+          try { clearTimeout(timer); resolve({ db: runtime.r(342219).db, media: runtime.r(951225) }) } catch (error) { reject(error) }
+        }])
+        Promise.resolve(globalThis.TURBOPACK.push([chunk, { otherChunks: [], runtimeModuleIds: [id] }])).catch(reject)
+      } catch (error) { clearTimeout(timer); reject(error) }
+    })
+    const { db, media } = api
+    if (db.name !== "venice-db-encrypted" || db.verno !== 31) throw new Error("Unsupported Character test schema.")
+    for (const id of cleanup) {
+      if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error("Unsafe generated Character ID.")
+      const character = await db.characters.get(id)
+      if (!character || !expectedPrefix || !character.name.startsWith(expectedPrefix)) throw new Error("Refusing to delete an unverified Character fixture.")
+      const chats = (await db.conversations.where("ownerId").equals(character.ownerId).toArray()).filter((chat) => chat.characterId === id)
+      for (const chat of chats) {
+        await db.transaction("rw", [db.conversations, db.messages, db.messageIds, db.messageImages], async () => {
+          const messageIds = await db.messages.where("conversationId").equals(chat.id).primaryKeys()
+          await db.messageImages.where("conversationId").equals(chat.id).delete()
+          await db.messages.bulkDelete(messageIds)
+          await db.messageIds.where("conversationId").equals(chat.id).delete()
+          await db.conversations.delete(chat.id)
+        })
+      }
+      await db.characters.delete(id)
+      await media.n(character)
+      const root = await navigator.storage.getDirectory()
+      try {
+        const directory = await (await root.getDirectoryHandle("media")).getDirectoryHandle(`character-photos-${character.ownerId}`)
+        for await (const [name, entry] of directory.entries()) {
+          if (entry.kind === "file" && name.startsWith(`${id}__`)) await directory.removeEntry(name)
+        }
+      } catch (error) { if (error.name !== "NotFoundError") throw error }
+    }
+    const rows = (await db.characters.toArray()).sort((a, b) => a.id.localeCompare(b.id))
+    const digest = async (value) => {
+      const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value)))
+      return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("")
+    }
+    let selected
+    if (sourceId) {
+      const source = await db.characters.get(sourceId)
+      if (!source || source.ownerId !== window.Clerk?.user?.id) throw new Error("Selected Character is missing or not owned by the account.")
+      const hydrated = await media.C(source)
+      selected = { fingerprint: await digest(source), portraitFingerprint: await digest(hydrated.photo ?? null) }
+    }
+    return {
+      characters: rows.length, fingerprint: await digest(rows),
+      conversations: await db.conversations.count(), messages: await db.messages.count(),
+      messageIds: await db.messageIds.count(), ...(selected ? { selected } : {}),
+    }
+  }, { cleanup, expectedPrefix, sourceId })
+}
+
+async function characterTransferTest(context, sourceId) {
+  if (sourceId) assert.match(sourceId, /^[\w-]{1,100}$/)
+  const page = await context.newPage()
+  await page.goto("https://venice.ai/character-chat", { waitUntil: "domcontentloaded" })
+  await waitForSignedInVenice(page)
+  await page.bringToFront()
+  const host = page.locator(`#${hostId}`)
+  const launcher = host.getByRole("button", { name: "Venice Sync", exact: true })
+  const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
+  const openCharacters = async () => {
+    await launcher.click()
+    await navigatePanel(dialog, "Characters")
+    await dialog.getByTestId("character-list").waitFor({ state: "visible", timeout: 45_000 })
+  }
+  await openCharacters()
+  const baseline = await characterStorageState(page, [], "", sourceId ?? "")
+  const readDownload = async (id) => {
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      dialog.locator(`[data-character-id="${id}"]`).getByRole("button", { name: "Export Character JSON", exact: true }).click(),
+    ]).catch(async (error) => {
+      const alerts = await dialog.getByRole("alert").allTextContents()
+      throw new Error(alerts.length ? `Character export failed: ${alerts.join("; ")}` : "Character download did not start.", { cause: error })
+    })
+    try {
+      const stream = await download.createReadStream()
+      assert.ok(stream)
+      const chunks = []
+      for await (const chunk of stream) chunks.push(chunk)
+      return JSON.parse(Buffer.concat(chunks).toString("utf8"))
+    } finally { await download.delete() }
+  }
+  const importFile = async (file, ids) => {
+    const before = new Set(await dialog.locator("[data-character-id]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-character-id"))))
+    const previousUrl = page.url()
+    await dialog.getByLabel("Import Character JSON", { exact: true }).setInputFiles({
+      name: "character-verification.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(file)),
+    })
+    await dialog.getByTestId("character-import-preview").waitFor({ state: "visible" })
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 60_000 }),
+      dialog.getByRole("button", { name: "Confirm import as new Character", exact: true }).click(),
+    ])
+    assert.equal(page.url(), previousUrl)
+    await openCharacters()
+    const values = await dialog.locator("[data-character-id]").evaluateAll((rows, name) => rows
+      .filter((row) => row.querySelector("h3")?.textContent === name).map((row) => row.getAttribute("data-character-id")), file.character.name)
+    const added = values.filter((id) => !before.has(id))
+    assert.equal(added.length, 1)
+    ids.push(added[0])
+    assert.match(added[0], /^[a-f0-9-]{36}$/)
+    if (file.character.photo) {
+      const image = dialog.locator(`[data-character-id="${added[0]}"]`).getByRole("img", { name: `${file.character.name} portrait`, exact: true })
+      await image.waitFor({ state: "visible" })
+      assert.ok(await image.evaluate(async (element) => { await element.decode(); return element.naturalWidth > 0 }))
+    }
+    return added[0]
+  }
+  const normalize = (value) => {
+    const skip = new Set(["id", "ownerId", "publicId", "sourceId", "remoteId", "photoMedia", "createdAtUnixTimestamp", "updatedAtUnixTimestamp", "lastUsed", "isImported", "isPublic", "isApiVisible"])
+    const canonical = (entry) => Array.isArray(entry) ? entry.map(canonical) : entry && typeof entry === "object" ?
+      Object.fromEntries(Object.entries(entry).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)])) : entry
+    return canonical(Object.fromEntries(Object.entries(value).filter(([key]) => !skip.has(key))))
+  }
+  const fixture = JSON.parse(await readFile(path.join(root, "scripts/fixtures/character.json"), "utf8"))
+  fixture.character.name = `Venice Sync Character E2E ${Date.now()}`
+  const ids = [], requests = []
+  page.on("request", (request) => {
+    if (request.method() !== "GET" && /(?:\/(?:inference|publish|responses|completions)(?:\/|$)|mind.*(?:chat|stream|infer|publish))/i.test(new URL(request.url()).pathname)) requests.push(new URL(request.url()).pathname)
+  })
+  try {
+    const first = await importFile(fixture, ids)
+    const exported = await readDownload(first)
+    assert.equal(exported.schemaVersion, "1")
+    assert.deepEqual(normalize(exported.character), normalize(fixture.character))
+    assert.equal(exported.character.ownerId, undefined)
+    assert.equal(exported.character.photoMedia, undefined)
+    await importFile(exported, ids)
+    await dialog.screenshot({ path: path.join(root, "test-results/tampermonkey-characters.png") })
+    await page.goto(`https://venice.ai/character-chat/${first}`, { waitUntil: "domcontentloaded" })
+    await page.waitForFunction((name) => [...document.querySelectorAll("h1,h2,h3,p,div,span")].some((element) =>
+      element.textContent === name && element.getClientRects().length > 0), fixture.character.name, { timeout: 45_000 })
+    await page.reload({ waitUntil: "domcontentloaded" })
+    await page.waitForFunction((name) => [...document.querySelectorAll("h1,h2,h3,p,div,span")].some((element) =>
+      element.textContent === name && element.getClientRects().length > 0), fixture.character.name, { timeout: 45_000 })
+  } finally {
+    assert.deepEqual(await characterStorageState(page, ids, fixture.character.name, sourceId ?? ""), baseline, "Character fixture cleanup did not preserve existing data.")
+    await page.goto("https://venice.ai/character-chat", { waitUntil: "domcontentloaded" })
+  }
+  let sourceResult
+  if (sourceId) {
+    await openCharacters()
+    const original = await readDownload(sourceId)
+    const prefix = `Venice Sync Character source-copy E2E ${Date.now()}`
+    const copy = { ...original, character: { ...original.character, name: prefix } }
+    const copies = []
+    try {
+      const id = await importFile(copy, copies)
+      const restored = await readDownload(id)
+      assert.deepEqual(normalize(restored.character), normalize(copy.character), "Character source copy changed portable data.")
+      sourceResult = { definitionAndPortraitRoundTrip: "matched", originalRecordAndPortraitFingerprints: "unchanged", privateContentsRetainedByTest: false }
+    } finally {
+      assert.deepEqual(await characterStorageState(page, copies, prefix, sourceId), baseline, "User Character source or portrait was changed.")
+    }
+  }
+  assert.equal(requests.length, 0)
+  return {
+    nativeJSONPreviewAndCopyImport: "passed", embeddedPortraitDecoded: "passed", contextAndSettingsRoundTrip: "matched",
+    newPrivateLocalCopies: "passed", nativeCharacterVisibleAfterReload: "passed",
+    generatedCharacterAndPhotoCleanup: "passed", existingCharacterFingerprints: "unchanged",
+    inferenceOrPublishRequests: 0, ...(sourceResult ? { selectedSource: sourceResult } : {}),
+    scriptEvaluatedByPlaywright: false,
+  }
+}
+
+async function main() {
+  if (selectedConversation && !transfer) throw new Error("--conversation requires the explicit --transfer opt-in.")
+  if (selectedAgentic && !agenticTransfer) throw new Error("--agentic-conversation requires --agentic-transfer.")
+  if (selectedCharacter && !charactersTransfer) throw new Error("--character requires --characters.")
+  console.log("Connecting to real Chrome. Approve its debugging prompt if shown.")
+  const browser = await chromium.connectOverCDP(await endpoint(), {
+    timeout: 120_000,
+  })
+  try {
+    const context = browser.contexts()[0]
+    assert.ok(context, "Chrome has no accessible context.")
+    const worker = context.serviceWorkers().find((candidate) =>
+      candidate.url().startsWith(`${extensionOrigin}/`),
+    )
+    if (worker) {
+      const canRunUserScripts = await worker.evaluate(
+        () => typeof globalThis.chrome.userScripts?.getScripts === "function",
+      )
+      if (!canRunUserScripts) {
+        throw new Error(
+          "Chrome blocks Tampermonkey execution. Enable 'Allow user scripts' in chrome://extensions/?id=dhdgffkkebhmkfjojejmpbldmpobfkfo, then retry. This test never changes that permission automatically.",
+        )
+      }
+    }
+    if (install) await installScript(context)
+    const result = await smokeTest(context)
+    if (transfer) result.conversationTransfer = await conversationTransferTest(context)
+    if (selectedConversation) result.selectedConversation = await selectedConversationTest(context, selectedConversation)
+    if (mindTransfer) result.mindHistory = await mindHistoryTransferTest(context)
+    if (agenticTransfer) result.agenticHistory = await mindHistoryTransferTest(context, true)
+    if (selectedAgentic) result.selectedAgentic = await selectedAgenticConversationTest(context, selectedAgentic)
+    if (mindPackage) result.mindPackage = await completeMindPackageTest(context)
+    if (charactersTransfer) result.characters = await characterTransferTest(context, selectedCharacter)
+    const artifact = await readFile(path.join(root, "dist/venice-sync.user.js"))
+    const report = {
+      timestamp: new Date().toISOString(),
+      chrome: browser.version(),
+      artifactSha256: createHash("sha256").update(artifact).digest("hex"),
+      installedViaTampermonkeyUiThisRun: install,
+      ...result,
+      veniceRecordContentsReadByTest: transfer || mindTransfer || mindPackage || agenticTransfer || charactersTransfer,
+      veniceStorageWrittenByTest: transfer || mindTransfer || mindPackage || agenticTransfer || charactersTransfer,
+    }
+    await writeFile(
+      path.join(root, "test-results/e2e-result.json"),
+      `${JSON.stringify(report, null, 2)}\n`,
+    )
+    console.log(JSON.stringify(report, null, 2))
+  } finally {
+    await browser.close()
+  }
+}
+
+main().catch((error) => {
+  console.error(error)
+  process.exitCode = 1
+})
