@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { ConversationTransfer } from "./ConversationTransfer"
 import { MindDefinitionTransfer } from "./MindDefinitionTransfer"
 import { CharacterTransfer } from "./CharacterTransfer"
+import { LibraryTransfer } from "./LibraryTransfer"
 import type { RuntimeInfo } from "./runtime"
 import { StorageOverview } from "./StorageOverview"
 import { VeniceCharactersIcon, VeniceClassicIcon, VeniceLibraryIcon, VeniceMindIcon } from "./components/VeniceIcons"
@@ -14,9 +15,9 @@ const contentPages = [
   { id: "conversations", title: "Conversations", Icon: VeniceClassicIcon, ready: true,
     description: "Agentic, Classic and Mind conversation histories.",
     note: "Classic, Mind and Agentic text-history JSON are ready." },
-  { id: "assets", title: "Library Assets", Icon: VeniceLibraryIcon, ready: false,
+  { id: "assets", title: "Library Assets", Icon: VeniceLibraryIcon, ready: true,
     description: "Assets from your Studio / Library.",
-    note: "A dedicated Library export page is reserved. The asset adapter is not connected yet." },
+    note: "Original image/video/audio files and source metadata. Restore independent Library copies, not source projects." },
   { id: "mind", title: "Mind", Icon: VeniceMindIcon, ready: true,
     description: "Mind definitions, separate from Mind conversation histories.",
     note: "Complete definition ZIP with resources, Assistant and Preview histories. Ordinary chats stay in Conversations." },
@@ -35,37 +36,18 @@ interface SyncPanelProps {
   reloadPage: () => void
 }
 
-function TransferDirections({ ready, mind = false, characters = false }: { ready: boolean; mind?: boolean; characters?: boolean }) {
+function TransferDirections({ ready, mind = false, characters = false, library = false }: { ready: boolean; mind?: boolean; characters?: boolean; library?: boolean }) {
   return (
     <dl className="grid gap-2 text-xs">
       <div className="flex items-center justify-between gap-3">
         <dt className="flex items-center gap-1.5 text-muted-foreground"><IconArrowDown size={16} aria-hidden="true" />Download</dt>
-        <dd>{ready ? mind ? "Mind ZIP available" : characters ? "Character JSON available" : "Classic / Mind / Agentic JSON available" : "Export planned"}</dd>
+        <dd>{ready ? mind ? "Mind ZIP available" : characters ? "Character JSON available" : library ? "Asset ZIP available" : "Classic / Mind / Agentic JSON available" : "Export planned"}</dd>
       </div>
       <div className="flex items-center justify-between gap-3">
         <dt className="flex items-center gap-1.5 text-muted-foreground"><IconArrowUp size={16} aria-hidden="true" />Upload</dt>
-        <dd>{ready ? mind ? "Mind ZIP available" : characters ? "Character JSON available" : "Classic / Mind / Agentic JSON available" : "Not available"}</dd>
+        <dd>{ready ? mind ? "Mind ZIP available" : characters ? "Character JSON available" : library ? "Asset ZIP or media file" : "Classic / Mind / Agentic JSON available" : "Not available"}</dd>
       </div>
     </dl>
-  )
-}
-
-function PlannedExport({ title, description }: { title: string; description: string }) {
-  return (
-    <section aria-label={`${title} export`} className="grid gap-4">
-      <div className="grid gap-2">
-        <h2 className="text-lg font-medium">{title}</h2>
-        <span className="w-fit rounded-full border px-2 py-0.5 text-xs text-muted-foreground">Planned</span>
-        <p className="text-sm text-muted-foreground">{description}</p>
-      </div>
-      <div className="grid gap-4 rounded-xl border p-4">
-        <TransferDirections ready={false} />
-        <Button variant="outline" disabled><IconArrowDown aria-hidden="true" />Export coming soon</Button>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        This page is reserved for a future export adapter. No records are read, exported or modified.
-      </p>
-    </section>
   )
 }
 
@@ -106,12 +88,13 @@ export function SyncPanel({ runtime, clicks, onTestInteraction, reloadPage }: Sy
   const [conversationsOpened, setConversationsOpened] = useState(false)
   const [mindOpened, setMindOpened] = useState(false)
   const [charactersOpened, setCharactersOpened] = useState(false)
+  const [libraryOpened, setLibraryOpened] = useState(false)
   const navigation = useRef<HTMLElement>(null)
-  const activeContent = contentPages.find((entry) => entry.id === page)
   const navigate = (next: Page) => {
     if (next === "conversations") setConversationsOpened(true)
     if (next === "mind") setMindOpened(true)
     if (next === "characters") setCharactersOpened(true)
+    if (next === "assets") setLibraryOpened(true)
     setPage(next)
   }
   useEffect(() => {
@@ -150,10 +133,10 @@ export function SyncPanel({ runtime, clicks, onTestInteraction, reloadPage }: Sy
                     </div>
                   </div>
                   <p className="text-xs text-muted-foreground">{description}</p>
-                  <TransferDirections ready={ready} mind={id === "mind"} characters={id === "characters"} />
+                  <TransferDirections ready={ready} mind={id === "mind"} characters={id === "characters"} library={id === "assets"} />
                   <p className="text-xs text-muted-foreground">{note}</p>
                   <Button size="sm" variant="outline" className="mt-auto" aria-label={`Open ${title}`} onClick={() => navigate(id)}>
-                    {ready ? id === "mind" ? "Open Mind packages" : id === "characters" ? "Open Characters" : "Open conversations" : "View export page"}
+                    {ready ? id === "mind" ? "Open Mind packages" : id === "characters" ? "Open Characters" : id === "assets" ? "Open Library" : "Open conversations" : "View export page"}
                   </Button>
                 </section>
               ))}
@@ -163,7 +146,7 @@ export function SyncPanel({ runtime, clicks, onTestInteraction, reloadPage }: Sy
         {conversationsOpened && <div hidden={page !== "conversations"}><ConversationTransfer reloadPage={reloadPage} /></div>}
         {mindOpened && <div hidden={page !== "mind"}><MindDefinitionTransfer /></div>}
         {charactersOpened && <div hidden={page !== "characters"}><CharacterTransfer reloadPage={reloadPage} /></div>}
-        {activeContent && !activeContent.ready && <PlannedExport title={activeContent.title} description={activeContent.note} />}
+        {libraryOpened && <div hidden={page !== "assets"}><LibraryTransfer reloadPage={reloadPage} /></div>}
         {page === "details" && <DetailsPage runtime={runtime} clicks={clicks} onTestInteraction={onTestInteraction} />}
       </div>
     </div>

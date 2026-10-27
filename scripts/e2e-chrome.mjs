@@ -17,6 +17,7 @@ const transfer = process.argv.includes("--transfer")
 const mindTransfer = process.argv.includes("--mind-transfer")
 const agenticTransfer = process.argv.includes("--agentic-transfer")
 const charactersTransfer = process.argv.includes("--characters")
+const libraryTransfer = process.argv.includes("--library")
 const mindPackage = process.argv.includes("--mind-package")
 const selectedConversation = process.argv.find((argument) => argument.startsWith("--conversation="))?.slice("--conversation=".length)
 const selectedAgentic = process.argv.find((argument) => argument.startsWith("--agentic-conversation="))?.slice("--agentic-conversation=".length)
@@ -210,11 +211,9 @@ async function checkPanelPages(page, dialog) {
   const results = path.join(root, "test-results")
   await mkdir(results, { recursive: true })
   await dialog.screenshot({ path: path.join(results, "tampermonkey-overview.png") })
-  for (const name of ["Library Assets"]) {
-    await navigatePanel(dialog, name)
-    await dialog.getByRole("heading", { name, exact: true }).waitFor({ state: "visible" })
-    assert.ok(await dialog.getByRole("button", { name: "Export coming soon", exact: true }).isDisabled())
-  }
+  await navigatePanel(dialog, "Library Assets")
+  await dialog.getByTestId("library-asset-list").waitFor({ state: "visible", timeout: 45_000 })
+  assert.ok(await dialog.getByRole("button", { name: "Upload Library asset", exact: true }).isVisible())
   await navigatePanel(dialog, "Characters")
   await dialog.getByTestId("character-list").waitFor({ state: "visible", timeout: 45_000 })
   assert.ok(await dialog.getByRole("button", { name: "Upload Character file", exact: true }).isVisible())
@@ -260,7 +259,7 @@ async function checkPanelPages(page, dialog) {
   await page.setViewportSize(originalSize)
   return { fourContentCategories: "passed", nativeCategoryIconShapes: "matched", nativeAgenticConversationGlyphsMatched: agenticGlyphs,
     mindConversationAvatarsDecoded: await avatars.count(),
-    plannedExportPages: "passed", unifiedConversationListAndTypeIcons: "passed", fullMindWithoutCheckboxes: "passed", diagnosticsSeparated: "passed", mobileLayout: "passed" }
+    allContentTransferPagesAvailable: "passed", unifiedConversationListAndTypeIcons: "passed", fullMindWithoutCheckboxes: "passed", diagnosticsSeparated: "passed", mobileLayout: "passed" }
 }
 
 async function checkStorageOverview(page, dialog) {
@@ -1257,6 +1256,186 @@ async function characterTransferTest(context, sourceId) {
   }
 }
 
+async function libraryTestState(page, assetIds = [], expectedPrefix = "") {
+  return page.evaluate(async ({ assetIds, expectedPrefix }) => {
+    const db = await new Promise((resolve, reject) => {
+      const id = `venice-sync-library-test-${crypto.randomUUID()}`, chunk = `venice-sync/${id}.js`
+      const timer = setTimeout(() => reject(new Error("Native Library test bridge timed out.")), 5000)
+      try {
+        globalThis.TURBOPACK.push([chunk, id, (runtime) => { try { clearTimeout(timer); resolve(runtime.r(342219).db) } catch (error) { reject(error) } }])
+        Promise.resolve(globalThis.TURBOPACK.push([chunk, { otherChunks: [], runtimeModuleIds: [id] }])).catch(reject)
+      } catch (error) { clearTimeout(timer); reject(error) }
+    })
+    if (db.name !== "venice-db-encrypted" || db.verno !== 31) throw new Error("Unsupported native Library test database.")
+    const root = await navigator.storage.getDirectory()
+    for (const id of assetIds) {
+      if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error("Unsafe generated Library asset ID.")
+      const message = await db.messages.get(id)
+      if (!message || !expectedPrefix || !message.content.startsWith(expectedPrefix) || !message.veniceSyncLibrary) throw new Error("Refusing to delete an unverified Library test asset.")
+      const conversationId = message.conversationId
+      const conversation = await db.conversations.get(conversationId)
+      if (!conversation || conversation.ownerId !== message.ownerId || !/^[a-f0-9-]{36}$/.test(conversationId)) throw new Error("Unexpected Library test ownership.")
+      const children = await db.messages.where("conversationId").equals(conversationId).toArray()
+      if (children.length !== 1 || children[0].id !== id) throw new Error("The generated Library container has unexpected additional messages.")
+      await db.transaction("rw", [db.conversations, db.messages, db.messageIds], async () => {
+        await db.messages.delete(id); await db.messageIds.delete(id); await db.conversations.delete(conversationId)
+      })
+      try { await (await root.getDirectoryHandle("media")).removeEntry(conversationId, { recursive: true }) } catch (error) { if (error.name !== "NotFoundError") throw error }
+      try {
+        const thumbnails = await root.getDirectoryHandle("thumbnails")
+        for await (const [name, entry] of thumbnails.entries()) if (entry.kind === "file" && name.startsWith(`${conversationId}_`)) await thumbnails.removeEntry(name)
+      } catch (error) { if (error.name !== "NotFoundError") throw error }
+    }
+    const state = {}
+    for (const name of ["conversations", "messages", "messageIds", "messageImages", "studioImageTurnMedia", "studioAudioTurnMedia", "characters"]) {
+      const records = (await db[name].toArray()).sort((a, b) => String(a.id).localeCompare(String(b.id)))
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(records)))
+      state[name] = { count: records.length, fingerprint: [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("") }
+    }
+    return state
+  }, { assetIds, expectedPrefix })
+}
+
+async function syntheticLibraryFiles(page, prefix) {
+  const generated = await page.evaluate(async () => {
+    const canvas = document.createElement("canvas")
+    canvas.width = 32; canvas.height = 32
+    const context = canvas.getContext("2d")
+    if (!context) throw new Error("Canvas is unavailable.")
+    context.fillStyle = "#3975d8"; context.fillRect(0, 0, 32, 32)
+    const png = await new Promise((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("PNG creation failed.")), "image/png"))
+    const mimeType = ["video/mp4", "video/webm"].find((type) => MediaRecorder.isTypeSupported(type))
+    if (!mimeType) throw new Error("Chrome has no usable synthetic video recorder.")
+    const stream = canvas.captureStream(10), chunks = []
+    let recorder
+    try {
+      recorder = new MediaRecorder(stream, { mimeType })
+      const result = new Promise((resolve, reject) => {
+        recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data) }
+        recorder.onerror = () => reject(new Error("Synthetic video recording failed."))
+        recorder.onstop = async () => resolve([...new Uint8Array(await new Blob(chunks, { type: mimeType }).arrayBuffer())])
+      })
+      recorder.start()
+      for (let frame = 0; frame < 8; frame++) {
+        context.fillStyle = frame % 2 ? "#3975d8" : "#71a6fa"; context.fillRect(0, 0, 32, 32)
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      recorder.stop()
+      return { png: [...new Uint8Array(await png.arrayBuffer())], video: await result, mimeType }
+    } finally { if (recorder?.state === "recording") recorder.stop(); stream.getTracks().forEach((track) => track.stop()) }
+  })
+  const samples = 32000, wav = Buffer.alloc(44 + samples * 2)
+  wav.write("RIFF", 0); wav.writeUInt32LE(wav.length - 8, 4); wav.write("WAVEfmt ", 8)
+  wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22)
+  wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(16000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34)
+  wav.write("data", 36); wav.writeUInt32LE(samples * 2, 40)
+  return [
+    { name: `${prefix}-image.png`, mimeType: "image/png", buffer: Buffer.from(generated.png), kind: "image" },
+    { name: `${prefix}-audio.wav`, mimeType: "audio/wav", buffer: wav, kind: "audio" },
+    { name: `${prefix}-video.${generated.mimeType === "video/mp4" ? "mp4" : "webm"}`, mimeType: generated.mimeType, buffer: Buffer.from(generated.video), kind: "video" },
+  ]
+}
+
+async function libraryTransferTest(context) {
+  const page = await context.newPage()
+  await page.goto("https://venice.ai/chat/agent", { waitUntil: "domcontentloaded" })
+  await waitForSignedInVenice(page); await page.bringToFront()
+  const host = page.locator(`#${hostId}`), launcher = host.getByRole("button", { name: "Venice Sync", exact: true })
+  const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
+  const openLibrary = async () => {
+    await launcher.click(); await navigatePanel(dialog, "Library Assets")
+    await dialog.getByTestId("library-asset-list").waitFor({ state: "visible", timeout: 45_000 })
+    const errors = await dialog.getByRole("region", { name: "Library asset transfer" }).getByRole("alert").allTextContents()
+    assert.equal(errors.length, 0, `Library UI errors: ${errors.join("; ")}`)
+  }
+  await openLibrary()
+  const baseline = await libraryTestState(page), prefix = `Venice-Sync-Library-E2E-${Date.now()}`
+  const fixtures = await syntheticLibraryFiles(page, prefix), ids = [], requests = []
+  page.on("request", (request) => {
+    if (request.method() !== "GET" && /(?:\/(?:inference|publish|responses|completions)(?:\/|$)|mind.*(?:chat|stream|infer|publish))/i.test(new URL(request.url()).pathname)) requests.push(new URL(request.url()).pathname)
+  })
+  const importFile = async (fixture) => {
+    const previous = new Set(await dialog.locator("[data-library-asset-key]").evaluateAll((cards) => cards.map((card) => card.getAttribute("data-library-asset-key"))))
+    const url = page.url()
+    await dialog.getByLabel("Import Library asset", { exact: true }).setInputFiles(fixture)
+    await dialog.getByTestId("library-import-preview").waitFor({ state: "visible", timeout: 30_000 })
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 60_000 }),
+      dialog.getByRole("button", { name: "Confirm import as new Library asset", exact: true }).click(),
+    ])
+    assert.equal(page.url(), url)
+    await openLibrary()
+    const added = (await dialog.locator("[data-library-asset-key]").evaluateAll((cards) => cards.map((card) => card.getAttribute("data-library-asset-key"))))
+      .filter((key) => !previous.has(key) && key.startsWith("chat:"))
+    assert.equal(added.length, 1)
+    const id = added[0].slice("chat:".length); ids.push(id)
+    return { id, key: added[0] }
+  }
+  try {
+    for (const fixture of fixtures) {
+      const imported = await importFile({ name: fixture.name, mimeType: fixture.mimeType, buffer: fixture.buffer })
+      const [download] = await Promise.all([
+        page.waitForEvent("download"),
+        dialog.locator(`[data-library-asset-key="${imported.key}"]`).getByRole("button", { name: "Export Library asset ZIP", exact: true }).click(),
+      ])
+      let zip
+      try {
+        const stream = await download.createReadStream(), chunks = []
+        assert.ok(stream)
+        for await (const chunk of stream) chunks.push(chunk)
+        zip = Buffer.concat(chunks)
+      } finally { await download.delete() }
+      const entries = unzipSync(zip), manifest = JSON.parse(strFromU8(entries["manifest.json"]))
+      assert.equal(manifest.asset.filename, fixture.name); assert.equal(manifest.asset.kind, fixture.kind)
+      assert.deepEqual(Buffer.from(entries["asset.bin"]), fixture.buffer)
+      assert.equal(createHash("sha256").update(entries["asset.bin"]).digest("hex"), manifest.asset.sha256)
+      await importFile({ name: `${prefix}-archive.zip`, mimeType: "application/zip", buffer: zip })
+    }
+    const mask = dialog.locator(`[data-library-asset-key]${ids.map((id) => `:not([data-library-asset-key="chat:${id}"])`).join("")}`)
+    await dialog.screenshot({ path: path.join(root, "test-results/tampermonkey-library.png"), mask: [mask] })
+    await page.goto("https://venice.ai/studio/library", { waitUntil: "domcontentloaded" })
+    await waitForSignedInVenice(page)
+    const image = page.getByRole("img", { name: fixtures[0].name, exact: true }).first()
+    await image.waitFor({ state: "visible", timeout: 45_000 })
+    await image.click()
+    const nativeDialog = page.getByRole("dialog")
+    const fullImage = nativeDialog.getByRole("img", { name: fixtures[0].name, exact: true })
+    await fullImage.waitFor({ state: "visible" })
+    await fullImage.evaluate((element) => element.decode())
+    const imageBytes = await fullImage.evaluate(async (element) => [...new Uint8Array(await (await fetch(element.src)).arrayBuffer())])
+    assert.deepEqual(Buffer.from(imageBytes), fixtures[0].buffer)
+    await page.keyboard.press("Escape")
+    await nativeDialog.waitFor({ state: "hidden" })
+    await page.getByRole("img", { name: "Video thumbnail", exact: true }).first().locator("xpath=ancestor::*[@role='group'][1]").click()
+    const video = nativeDialog.locator("video")
+    await video.waitFor({ state: "visible" })
+    await page.waitForFunction(() => [...document.querySelectorAll("video")].some((element) => element.readyState >= 2 && element.videoWidth > 0 && element.duration > 0))
+    const videoBytes = await video.evaluate(async (element) => [...new Uint8Array(await (await fetch(element.currentSrc)).arrayBuffer())])
+    assert.deepEqual(Buffer.from(videoBytes), fixtures[2].buffer)
+    await page.keyboard.press("Escape")
+    await nativeDialog.waitFor({ state: "hidden" })
+    const [audioRequest] = await Promise.all([
+      page.waitForEvent("request", { predicate: (request) => request.url().startsWith("blob:") && request.resourceType() === "media", timeout: 30_000 }),
+      page.getByRole("img", { name: /Audio album cover|音频.*封面/i }).first().locator("xpath=ancestor::*[@role='group'][1]").click(),
+    ])
+    await nativeDialog.getByRole("button", { name: /Pause|暂停/i }).waitFor({ state: "visible" })
+    await nativeDialog.getByText(fixtures[1].name, { exact: true }).waitFor({ state: "visible" })
+    const audioBytes = await page.evaluate(async (url) => [...new Uint8Array(await (await fetch(url)).arrayBuffer())], audioRequest.url())
+    assert.deepEqual(Buffer.from(audioBytes), fixtures[1].buffer)
+    await page.keyboard.press("Escape")
+    assert.equal(requests.length, 0)
+  } finally {
+    assert.deepEqual(await libraryTestState(page, ids, prefix), baseline, "Library test cleanup changed existing data.")
+    await page.goto("https://venice.ai/chat/agent", { waitUntil: "domcontentloaded" })
+  }
+  return {
+    imageAudioVideoImport: "passed", originalBytesAndHashesRoundTrip: "matched", archiveReimportCreatesNewCopies: "passed",
+    nativeLibraryMediaVisible: "passed", sourceChatsAndProjectsNotRecreated: "passed",
+    existingRecordsFingerprints: "unchanged", generatedContainersFilesAndCachesCleanup: "passed",
+    inferenceOrPublishRequests: 0, scriptEvaluatedByPlaywright: false,
+  }
+}
+
 async function main() {
   if (selectedConversation && !transfer) throw new Error("--conversation requires the explicit --transfer opt-in.")
   if (selectedAgentic && !agenticTransfer) throw new Error("--agentic-conversation requires --agentic-transfer.")
@@ -1290,6 +1469,7 @@ async function main() {
     if (selectedAgentic) result.selectedAgentic = await selectedAgenticConversationTest(context, selectedAgentic)
     if (mindPackage) result.mindPackage = await completeMindPackageTest(context)
     if (charactersTransfer) result.characters = await characterTransferTest(context, selectedCharacter)
+    if (libraryTransfer) result.library = await libraryTransferTest(context)
     const artifact = await readFile(path.join(root, "dist/venice-sync.user.js"))
     const report = {
       timestamp: new Date().toISOString(),
@@ -1297,8 +1477,8 @@ async function main() {
       artifactSha256: createHash("sha256").update(artifact).digest("hex"),
       installedViaTampermonkeyUiThisRun: install,
       ...result,
-      veniceRecordContentsReadByTest: transfer || mindTransfer || mindPackage || agenticTransfer || charactersTransfer,
-      veniceStorageWrittenByTest: transfer || mindTransfer || mindPackage || agenticTransfer || charactersTransfer,
+      veniceRecordContentsReadByTest: transfer || mindTransfer || mindPackage || agenticTransfer || charactersTransfer || libraryTransfer,
+      veniceStorageWrittenByTest: transfer || mindTransfer || mindPackage || agenticTransfer || charactersTransfer || libraryTransfer,
     }
     await writeFile(
       path.join(root, "test-results/e2e-result.json"),

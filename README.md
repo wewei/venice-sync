@@ -4,7 +4,8 @@ A React + TypeScript + shadcn userscript for Venice, **installed and executed by
 Tampermonkey**. Its WebUI organizes local content into four categories:
 conversations, Library assets, Mind definitions and Characters. Classic / Mind /
 Agentic text-history JSON, complete local Mind ZIP packages, and native Character
-JSON import/export work today; Library transfer is clearly marked as planned.
+JSON import/export work today, together with original Library image/video/audio
+asset ZIP import/export.
 Cloud synchronization is not implemented.
 
 ## Storage model
@@ -41,14 +42,13 @@ The dialog opens on **Overview**, showing what can be downloaded or uploaded:
 | Conversations: Classic | JSON available | JSON available |
 | Conversations: Mind text / reasoning | JSON available | JSON available; existing destination Mind required |
 | Conversations: Agentic text / reasoning | JSON available | JSON available; creates an independent Agentic chat |
-| Library Assets (Studio / Library) | Planned | Not available |
+| Library Assets (generated images / videos / audio) | Single-asset ZIP available | ZIP or media file; creates an independent local copy |
 | Mind definitions + resources + all saved Builder / Preview histories | ZIP available | ZIP available; creates a new local unpublished Mind |
 | Characters: local definitions + embedded portraits/context | Native JSON available | Native JSON available; creates a new private local Character |
 
 Mind conversation history belongs under **Conversations**, not the **Mind**
 definition page. The latter includes its saved editor Assistant and
-Preview threads, not ordinary chat sessions. Planned export pages contain disabled actions and never read
-or modify their content stores. Upload means local file import, not cloud upload.
+Preview threads, not ordinary chat sessions. Upload means local file import, not cloud upload.
 The dialog is up to 1152px wide and 864px high on desktop, constrained to the
 viewport on small screens. Content rows emphasize titles and local Mind avatars;
 download/upload/refresh actions use Tabler icons with accessible names and hover
@@ -93,6 +93,41 @@ vendored into the bundle. Agentic rows use Venice's actual glyph, not a generic
 Tabler robot. Until native navigation is available (or in the
 standalone preview), a Tabler fallback is used. `components.json` selects Tabler
 for future shadcn components too.
+
+## Library asset transfer
+
+Open **Library Assets** to browse the current account's generated images, videos
+and audio, with lazy original-file previews and per-asset ZIP downloads. Sources
+follow the observed native `/studio/library` aggregate: permanent Classic media
+chats, Dexie Studio image outputs/audio, generated Mind media, and completed
+Discover generations. This is not a dump of every OPFS file or `userMedia`
+upload; newer Studio project/output stores are not assumed to be equivalent.
+Missing originals and unsupported media are reported per asset, never deleted.
+
+The download contains the unchanged original and available provenance metadata,
+with size and SHA-256 checks (`venice-sync-library-asset` v1). Source metadata
+may include private prompts/settings. Archives are **unencrypted**; keep them
+private. External cover artwork, thumbnail caches, source generation inputs,
+conversations, and full Studio projects are not included.
+
+The upload icon accepts that ZIP or a raw supported image/video/audio file.
+Preview and cancel are read-only. Confirming creates fresh IDs and a dedicated
+permanent local media-chat container, which **may also appear in Conversations**.
+It does not overwrite originals or recreate generation settings, source chats
+or projects. No generation, inference or publishing is performed.
+
+Files must decode successfully before persistence. Original bytes are retained;
+image/video thumbnails are generated locally for native Library compatibility.
+Files are written before one add-only native Dexie transaction inserts the
+container, media message and message-ID projection. Failure removes only that
+new file namespace; incomplete cleanup is explicitly reported. Successful imports
+reload the same URL; save drafts first. Cancelled or failed imports do not reload.
+
+Limits: 100 MiB per original, 8 MiB metadata, 128 MiB ZIP; decoded image/video
+frames at most 64 megapixels, and a 15-second media-load timeout. Supported MIME
+types: PNG/JPEG/WebP/GIF/AVIF/BMP; MP4/WebM/QuickTime; MPEG/WAV/OGG/MP4/FLAC/WebM/AAC
+audio. Playback depends on Chrome's codecs. SVG, documents and remote-file
+references are not imported.
 
 ## Basic Classic conversation transfer
 
@@ -341,7 +376,7 @@ No CDN-hosted React or external font is needed at runtime.
 On Venice, click **Venice Sync** and confirm:
 
 1. Overview shows the four content categories and distinguishes available
-   Classic JSON transfers from planned exports.
+   JSON, ZIP and Library media transfer entry points.
 2. In **Details**, runtime is **Tampermonkey**, mode is **userscript**, and version
    is **0.1.0**. Expanding **UI smoke test** and clicking **Test interaction**
    changes **Dummy clicks: 0** to **Dummy clicks: 1**.
@@ -428,6 +463,10 @@ npm run test:e2e -- --install --mind-package
 # Native Character JSON/portrait/context import-export-reimport and cleanup.
 npm run test:e2e -- --install --characters
 
+# Library PNG/WAV/video originals, ZIP reimport, native viewers/playback,
+# original-data fingerprints and targeted test-file cleanup.
+npm run test:e2e -- --install --library
+
 # Optionally verify a selected current-account Character via a temporary copy,
 # with its original record and portrait fingerprints unchanged.
 npm run test:e2e -- --characters --character=LOCAL_CHARACTER_ID
@@ -440,7 +479,7 @@ npm run test:e2e -- --transfer --conversation=CLASSIC_CHAT_ID
 
 The test opens a dedicated Venice tab, checks the four content categories,
 unified conversation list/type icons, full-Mind-without-checkboxes behavior,
-planned export pages and enlarged desktop/390px mobile layout, then
+available transfer pages and enlarged desktop/390px mobile layout, then
 opens Details to check the real manager identity and dummy button. It verifies
 Shadow DOM portal placement and rendered styles,
 compares displayed storage summaries against the page's actual storage metadata,

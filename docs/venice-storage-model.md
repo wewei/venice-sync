@@ -404,23 +404,65 @@ OPFS:
 [Character 格式](../src/character-format.ts)、
 [原生 repository/parser/photo 适配](../src/venice-characters.ts)。
 
-## 8. Library / Studio：已知与未知
+## 8. Library / Studio：实际生成媒体聚合
 
-较早的存储快照中已见 Dexie 的 `studioImageSessions`、`studioImageTurns`、
-`studioImageTurnMedia` 及音视频相关表，也见过 RxDB `studioProjects`、
-`studioOutputs` 等 collection/store，以及后续新增的 Studio 关联会话。
+当前原生路由是 `/studio/library`，不是单独一个 Library 表。
+观察到的网页聚合路径由模块 `390220` 读取：
 
-**目前尚未把这些代际数据、Library 展示条目和实际文件完整一一对应。**
-因此不能把上述表名或 OPFS `media/` 下所有文件简单归为“Library Assets”。
-同样，钱包、分析、缓存、账号 SDK 等数据库也不应进入内容备份。
+| 来源 | 归属及筛选 | 原文件位置 |
+| --- | --- | --- |
+| 旧版聊天 | Clerk 所属的非临时 `conversations`，再以 conversationId 关联 assistant 媒体消息；排除 placeholder | `media/{conversationId}/{id}.{ext}` |
+| Studio 图像 | Dexie `studioImageTurnMedia`，Clerk ownerId，排除 `mediaRole=input` | `media/{sessionId}/{id}.{ext}` |
+| Studio 音频 | Dexie `studioAudioTurnMedia`，Clerk ownerId | `media/{sessionId}/{id}.{ext}` |
+| Mind 生成媒体 | RxDB `mindMedia` v6，Venice 内部 ownerId，generatedImage/generatedVideo | `media/{mindConversationId}/{id}.{ext}` |
+| Discover 生成媒体 | RxDB `discoverGenerations` v9，内部 ownerId，completed 且为生成图片/视频 | `discover/generations/{id}.{ext}` |
 
-Library 页目前仍是明确的预留入口。实现前需要分别确认：
+扩展名由原生 `resolveMediaLocationParams` 计算，不能简单对 MIME 截取。
+Dexie `messages` 没有 ownerId 索引，应从所属会话关联查询。
+旧图像还可能存在 `messageImages.contentBinary` 内嵌副本。
+缺失 MIME 时遵循原生图像 WebP、视频 MP4、音乐 MPEG 的回退类型；
+明确不支持的 MIME 单独报错，不能让一项隐藏整个有效列表。
+原生网页还会按用户设置筛选内容；存储资产列表不保证与其显示数量相等。
 
-1. 项目、会话、生成轮次、输出与资产之间的真实关系；
-2. 当前账户归属、物化文件与外链、缩略图与原图；
-3. 新老数据的迁移状态、去重键及实际原生读取/创建路径；
-4. 多个业务实体是否共享同一媒体，删除/回滚能否严格限定范围；
-5. 导入后原生列表更新与实际媒体显示，而不是只验证“行数增加”。
+Studio 图像记录包含 sessionId、turnId、模型、prompt/imageSettings、
+mediaRole、增强提示词等来源信息。不能由这些记录推导出完整项目迁移。
+RxDB `studioProjects` / `studioOutputs` 属于另一代 Studio 模型，
+不在本次观察到的网页 Library 聚合路径内。
+`userMedia` v1 则主要是上传文件，路径 `user-media/{id}.{ext}`；
+其原生 size 字段观察到使用 KB，不可假定为字节，也不能仅写入该表
+就宣称资产已进入网页 Library。
+
+### 8.1 原始资产 ZIP 与独立副本
+
+本项目的 v1 ZIP 仅含 `manifest.json` 和 `asset.bin`：一个不改字节的原文件，
+SHA-256、字节数、MIME 和清除账户归属字段后的来源元信息。
+不包含源会话、Studio 项目、生成输入、外部封面和缩略图缓存。
+来源提示词/设置只作为 provenance 保留，不恢复成可执行生成配置。
+
+导入先解码验证，再为原文件和可选的 500px JPEG 缩略图生成新 UUID 路径：
+
+```text
+media/{newConversationId}/{newAssetId}.{nativeExtension}
+thumbnails/{newConversationId}_{newAssetId}_thumb500.jpg
+```
+
+随后通过原生 Dexie 的一个事务 `add` 新永久媒体容器会话、
+assistant 媒体消息及 `messageIds` 投影。图片/视频/音频分别采用
+image/video/music 类型，并明确标识 `Imported Library asset`，
+不伪造一次生成。`veniceSyncLibrary` 保存原来源元信息，供再次导出。
+这个容器也可能出现在 Conversations；确认页会告知，并在成功后重载同一页面。
+文件写入失败或数据库事务失败，仅清理本次 UUID 命名空间。
+
+### 8.2 只读与原生缩略图的区别
+
+原生 Library 缩略图 hook 在找不到部分 Studio 原文件时可能删除媒体记录。
+因此本项目列表/预览直接以 existing-only OPFS handle 读取，
+**不调用该 hook，也不为“修复”预览删记录或创建目录**。
+原文件缺失或格式不支持会明确显示；不能导出空壳或下载外链冒充本地原件。
+
+实现：[ZIP 格式](../src/library-format.ts)、
+[原生列表与导入事务](../src/venice-library.ts)、
+[受限 OPFS 操作](../src/library-files.ts)。
 
 ## 9. 本项目的归档与一致性边界
 
@@ -431,6 +473,7 @@ Library 页目前仍是明确的预留入口。实现前需要分别确认：
 | Agentic 聊天 | `venice-sync-agentic-conversation` v1 JSON；8 MiB | 已结束的文本、拒绝和推理；不建立 Mind 绑定 |
 | Mind 定义 | `venice-sync-mind` v1 ZIP | 定义、原始资源、所有已保存的 Assistant/Preview 历史 |
 | Character | Venice 原生 schemaVersion `"1"` JSON；8 MiB | 定义、内嵌头像、设置与已保存上下文文本 |
+| Library 资产 | `venice-sync-library-asset` v1 ZIP；原文件 100 MiB、元信息 8 MiB、ZIP 128 MiB | 单个原始图片/视频/音频及来源元信息；独立副本，不迁移源项目 |
 
 Mind ZIP 限制：压缩/展开总量 128 MiB、单文件 25 MiB、元信息 8 MiB、
 最多 2048 个资源文件，逐文件校验大小和 SHA-256。路径和归属也必须校验；
@@ -446,6 +489,7 @@ SHA-256 只检查内容一致性，**不证明归档来自可信作者**。
 | Mind/Agentic 聊天 | 先写新消息，后创建线程；失败定向清理 | 原生 RxDB 响应式更新 |
 | 完整 Mind | 先文件/辅助数据/编辑器历史，最后定义；失败定向清理 | 原生 RxDB 更新 |
 | Character | 先新头像，后原生 Dexie add；失败定向清理 | 成功后重载同一页面 |
+| Library 资产 | 先原文件/缩略图，后单个 Dexie 多表 add 事务；失败定向清理 | 成功后重载同一页面 |
 
 所有导入都创建新副本，重新绑定当前账户并重建必要引用，不覆盖原记录。
 但 RxDB 多 collection 与 OPFS 不存在一个通用跨系统事务；

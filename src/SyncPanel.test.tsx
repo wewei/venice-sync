@@ -9,7 +9,11 @@ import { listClassicConversations, waitForVeniceOwner } from "./venice-classic"
 import { listMindHistory } from "./venice-mind-history"
 import { listMindDefinitions } from "./venice-mind-package"
 import { listCharacters } from "./venice-characters"
+import { listLibraryAssets } from "./venice-library"
 
+vi.mock("./venice-library", () => ({
+  listLibraryAssets: vi.fn(), readLibraryAsset: vi.fn(), exportLibraryAsset: vi.fn(), importLibraryAsset: vi.fn(),
+}))
 vi.mock("./venice-characters", () => ({
   listCharacters: vi.fn(), loadCharacterPortrait: vi.fn(), exportCharacter: vi.fn(), importCharacter: vi.fn(),
 }))
@@ -41,6 +45,7 @@ beforeEach(() => {
   vi.mocked(listMindHistory).mockResolvedValue({ conversations: [], targets: [] })
   vi.mocked(listMindDefinitions).mockResolvedValue([])
   vi.mocked(listCharacters).mockResolvedValue([])
+  vi.mocked(listLibraryAssets).mockResolvedValue([])
   vi.mocked(readStorageOverview).mockResolvedValue({
     origin: "https://venice.ai", readAt: "2026-10-27T05:00:00Z",
     localStorage: { status: "success", data: { entries: [], bytes: 0 } },
@@ -72,12 +77,12 @@ describe("transfer-focused WebUI", () => {
     expect(listMindHistory).not.toHaveBeenCalled()
   })
 
-  it.each(["Library Assets"])("reserves the %s export page without fake data or active upload actions", async (name) => {
+  it("loads the Library asset page lazily with real import actions", async () => {
     render(<SyncPanel {...props} />)
-    await navigate(name)
-    expect(screen.getByRole("heading", { name })).toBeVisible()
-    expect(screen.getByText("Planned", { exact: true })).toBeVisible()
-    expect(screen.getByRole("button", { name: "Export coming soon" })).toBeDisabled()
+    expect(listLibraryAssets).not.toHaveBeenCalled()
+    await navigate("Library Assets")
+    expect(await screen.findByText("No generated Library assets in this account.")).toBeVisible()
+    expect(screen.getByRole("button", { name: "Upload Library asset" })).toBeVisible()
     expect(screen.queryByLabelText("Import conversation JSON")).toBeNull()
     expect(readStorageOverview).not.toHaveBeenCalled()
     expect(listClassicConversations).not.toHaveBeenCalled()
