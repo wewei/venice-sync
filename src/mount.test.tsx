@@ -23,11 +23,11 @@ function setup() {
   const host = document.getElementById(HOST_ID)
   const container =
     host?.shadowRoot?.querySelector<HTMLElement>("[data-venice-sync-app]")
-  if (!host || !container) throw new Error("Dummy UI was not mounted")
+  if (!host || !container) throw new Error("UI was not mounted")
   return { host, container, ui: within(container) }
 }
 
-describe("isolated dummy UI", () => {
+describe("isolated UI", () => {
   it("mounts styles and content inside one Shadow DOM", () => {
     const { host, ui } = setup()
     expect(host.shadowRoot?.querySelector("style")).toHaveTextContent(
@@ -61,7 +61,7 @@ describe("isolated dummy UI", () => {
     await user.click(ui.getByRole("button", { name: "Details" }))
     await user.click(ui.getByText("UI smoke test", { exact: true }))
     await user.click(ui.getByRole("button", { name: "Test interaction" }))
-    expect(ui.getByRole("status")).toHaveTextContent("Dummy clicks: 1")
+    expect(ui.getByRole("status")).toHaveTextContent("Test clicks: 1")
     await user.click(ui.getByRole("button", { name: "Close" }))
     expect(ui.queryByRole("dialog")).toBeNull()
   })

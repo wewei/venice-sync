@@ -76,7 +76,7 @@ function DetailsPage({ runtime, clicks, onTestInteraction }: Omit<SyncPanelProps
         <summary className="cursor-pointer font-medium">UI smoke test</summary>
         <div className="mt-3 grid gap-2">
           <Button onClick={onTestInteraction}>Test interaction</Button>
-          <p role="status" aria-live="polite">Dummy clicks: {clicks}</p>
+          <p role="status" aria-live="polite">Test clicks: {clicks}</p>
           <p className="text-xs text-muted-foreground">This counter lives in memory and resets when the page reloads.</p>
         </div>
       </details>

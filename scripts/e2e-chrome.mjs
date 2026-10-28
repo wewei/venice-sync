@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url"
 import { chromium } from "playwright-core"
 import { strFromU8, strToU8, unzipSync, zipSync } from "fflate"
 import { syntheticMindPackage } from "./fixtures/mind-package.mjs"
+import packageJson from "../package.json" with { type: "json" }
 
 const root = fileURLToPath(new URL("../", import.meta.url))
 const extensionOrigin =
@@ -241,6 +242,7 @@ async function checkPanelPages(page, dialog) {
   const originalSize = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))
   await page.setViewportSize({ width: 390, height: 844 })
   await dialog.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  await dialog.evaluate(async (element) => { await Promise.all(element.getAnimations().map((animation) => animation.finished)) })
   const mobile = await dialog.evaluate((element) => {
     const box = element.getBoundingClientRect()
     return { width: box.width, height: box.height, left: box.left, right: box.right, top: box.top, bottom: box.bottom, overflow: element.scrollWidth > element.clientWidth }
@@ -327,7 +329,7 @@ async function smokeTest(context) {
   await navigatePanel(dialog, "Details")
   assert.equal(await dialog.getByTestId("runtime-handler").innerText(), "Tampermonkey")
   assert.equal(await dialog.getByTestId("runtime-mode").innerText(), "userscript")
-  assert.equal(await dialog.getByText("0.1.0", { exact: true }).count(), 1)
+  assert.equal(await dialog.getByText(packageJson.version, { exact: true }).count(), 1)
 
   const storage = await checkStorageOverview(page, dialog)
   const hostInput = page.locator("textarea").first()
@@ -335,11 +337,11 @@ async function smokeTest(context) {
     await hostInput.focus()
     assert.ok(await dialog.isVisible(), "Host autofocus dismissed the non-modal dialog.")
   }
-  const status = dialog.getByRole("status").filter({ hasText: "Dummy clicks:" })
+  const status = dialog.getByRole("status").filter({ hasText: "Test clicks:" })
   await openUiDiagnostics(dialog)
-  assert.equal(await status.innerText(), "Dummy clicks: 0")
+  assert.equal(await status.innerText(), "Test clicks: 0")
   await dialog.getByRole("button", { name: "Test interaction" }).click()
-  await status.filter({ hasText: "Dummy clicks: 1" }).waitFor()
+  await status.filter({ hasText: "Test clicks: 1" }).waitFor()
   const styles = await dialog.evaluate((element) => {
     const computed = getComputedStyle(element)
     return {
@@ -362,7 +364,7 @@ async function smokeTest(context) {
     await closeWithPointerCheck(page, dialog)
     await launcher.click()
     await openUiDiagnostics(dialog)
-    await status.filter({ hasText: "Dummy clicks: 1" }).waitFor()
+    await status.filter({ hasText: "Test clicks: 1" }).waitFor()
   }
   await page.keyboard.press("Escape")
   await dialog.waitFor({ state: "hidden" })
@@ -372,13 +374,13 @@ async function smokeTest(context) {
   assert.equal(await host.count(), 1)
   await launcher.click()
   await openUiDiagnostics(dialog)
-  await status.filter({ hasText: "Dummy clicks: 0" }).waitFor()
+  await status.filter({ hasText: "Test clicks: 0" }).waitFor()
   await checkStorageOverview(page, dialog)
 
   return {
     runtime: "Tampermonkey",
     mode: "userscript",
-    version: "0.1.0",
+    version: packageJson.version,
     webui,
     counterInteraction: "passed",
     storageOverview: "passed",

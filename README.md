@@ -399,6 +399,15 @@ are made. JSON files contain private content in plaintext; keep them secure.
 
 ## Build and install
 
+**Upgrade from the Dummy release**
+
+The userscript is now named **Venice Sync** (v0.2.0). Its namespace and GitHub
+update/download URLs are unchanged. When installing over **Venice Sync - Dummy**,
+Tampermonkey may retain both entries because the name changed. Disable the old
+Dummy entry and leave only **Venice Sync** enabled, then reload Venice. Otherwise
+the old script may mount first and hide the new version. You do not need to
+delete local Venice data or the old script.
+
 ```powershell
 npm run build
 npm run preview
@@ -421,8 +430,8 @@ On Venice, click **Venice Sync** and confirm:
 1. Overview shows the four content categories and distinguishes available
    JSON, ZIP and Library media transfer entry points.
 2. In **Details**, runtime is **Tampermonkey**, mode is **userscript**, and version
-   is **0.1.0**. Expanding **UI smoke test** and clicking **Test interaction**
-   changes **Dummy clicks: 0** to **Dummy clicks: 1**.
+   is **0.2.0**. Expanding **UI smoke test** and clicking **Test interaction**
+   changes **Test clicks: 0** to **Test clicks: 1**.
 3. Closing and reopening the dialog works.
 4. Reloading the page mounts one launcher and resets the counter.
 5. Venice's existing interface and styles remain intact.
@@ -527,7 +536,7 @@ npm run test:e2e -- --transfer --conversation=CLASSIC_CHAT_ID
 The test opens a dedicated Venice tab, checks the four content categories,
 unified conversation list/type icons, full-Mind-without-checkboxes behavior,
 available transfer pages and enlarged desktop/390px mobile layout, then
-opens Details to check the real manager identity and dummy button. It verifies
+opens Details to check the real manager identity and diagnostic button. It verifies
 Shadow DOM portal placement and rendered styles,
 compares displayed storage summaries against the page's actual storage metadata,
 checks refresh,

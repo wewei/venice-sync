@@ -12,12 +12,12 @@ export default defineConfig(({ command }) => ({
     command === "build" && monkey({
       entry: "src/main.tsx",
       userscript: {
-        name: "Venice Sync - Dummy",
+        name: "Venice Sync",
         namespace: "https://github.com/wewei/venice-sync",
         version: packageJson.version,
         downloadURL: "https://github.com/wewei/venice-sync/releases/latest/download/venice-sync.user.js",
         updateURL: "https://github.com/wewei/venice-sync/releases/latest/download/venice-sync.user.js",
-        description: "Local Classic conversation JSON import/export and storage metadata. No cloud synchronization.",
+        description: "Local backup and transfer for Venice conversations, Minds, Characters, Library assets and Studio sessions. No cloud synchronization.",
         match: ["https://venice.ai/*"],
         grant: ["GM_info", "unsafeWindow"],
         "run-at": "document-idle",

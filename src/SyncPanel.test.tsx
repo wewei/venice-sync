@@ -74,7 +74,7 @@ describe("transfer-focused WebUI", () => {
     expect(within(conversations).getByText(/Agentic text-history JSON are ready/)).toBeVisible()
     expect(screen.queryByTestId("runtime-handler")).toBeNull()
     expect(screen.queryByTestId("storage-result")).toBeNull()
-    expect(screen.queryByText("Dummy clicks: 0")).toBeNull()
+    expect(screen.queryByText("Test clicks: 0")).toBeNull()
     expect(readStorageOverview).not.toHaveBeenCalled()
     expect(listClassicConversations).not.toHaveBeenCalled()
     expect(listMindHistory).not.toHaveBeenCalled()
