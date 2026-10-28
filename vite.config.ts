@@ -3,6 +3,7 @@ import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react"
 import { defineConfig } from "vite"
 import monkey from "vite-plugin-monkey"
+import packageJson from "./package.json" with { type: "json" }
 
 export default defineConfig(({ command }) => ({
   plugins: [
@@ -13,7 +14,9 @@ export default defineConfig(({ command }) => ({
       userscript: {
         name: "Venice Sync - Dummy",
         namespace: "https://github.com/wewei/venice-sync",
-        version: "0.1.0",
+        version: packageJson.version,
+        downloadURL: "https://github.com/wewei/venice-sync/releases/latest/download/venice-sync.user.js",
+        updateURL: "https://github.com/wewei/venice-sync/releases/latest/download/venice-sync.user.js",
         description: "Local Classic conversation JSON import/export and storage metadata. No cloud synchronization.",
         match: ["https://venice.ai/*"],
         grant: ["GM_info", "unsafeWindow"],

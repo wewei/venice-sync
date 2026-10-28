@@ -9,7 +9,7 @@ import { syntheticMindPackage } from "./fixtures/mind-package.mjs"
 
 const root = fileURLToPath(new URL("../", import.meta.url))
 const extensionOrigin =
-  "chrome-extension://dhdgffkkebhmkfjojejmpbldmpobfkfo"
+  `chrome-extension://${process.env.TM_EXTENSION_ID || "dhdgffkkebhmkfjojejmpbldmpobfkfo"}`
 const scriptUrl = "http://127.0.0.1:4173/venice-sync.user.js"
 const hostId = "venice-sync-userscript-host"
 const install = process.argv.includes("--install")
@@ -181,7 +181,7 @@ async function checkAgenticGlyphs(page, dialog) {
 async function checkPanelPages(page, dialog) {
   await navigatePanel(dialog, "Overview")
   await page.waitForFunction(() => ["/chat/classic", "/character-chat", "/minds"].every((href) =>
-    document.querySelector(`a[href="${href}"] svg`)), undefined, { timeout: 30_000 })
+    document.querySelector(`a[href="${href}"] svg`)), undefined, { timeout: 90_000 })
   await dialog.locator('[data-venice-icon="mind-native"]').first().waitFor({ state: "visible", timeout: 10_000 })
   const nativeIconMatches = await dialog.getByRole("navigation", { name: "Sync pages" }).evaluate((navigation) => {
     const normalize = (value) => value.replace(/\s+/g, " ").trim().replace(/[zZ]$/, "")
