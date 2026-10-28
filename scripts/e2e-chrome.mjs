@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { chromium } from "playwright-core"
-import { strFromU8, unzipSync } from "fflate"
+import { strFromU8, strToU8, unzipSync, zipSync } from "fflate"
 import { syntheticMindPackage } from "./fixtures/mind-package.mjs"
 
 const root = fileURLToPath(new URL("../", import.meta.url))
@@ -18,6 +18,7 @@ const mindTransfer = process.argv.includes("--mind-transfer")
 const agenticTransfer = process.argv.includes("--agentic-transfer")
 const charactersTransfer = process.argv.includes("--characters")
 const libraryTransfer = process.argv.includes("--library")
+const studioTransfer = process.argv.includes("--studio-sessions")
 const mindPackage = process.argv.includes("--mind-package")
 const selectedConversation = process.argv.find((argument) => argument.startsWith("--conversation="))?.slice("--conversation=".length)
 const selectedAgentic = process.argv.find((argument) => argument.startsWith("--agentic-conversation="))?.slice("--agentic-conversation=".length)
@@ -1436,6 +1437,202 @@ async function libraryTransferTest(context) {
   }
 }
 
+async function studioTestState(page, prefix, cleanup = false, kind = "image") {
+  return page.evaluate(async ({ prefix, cleanup, kind }) => {
+    const db = await new Promise((resolve, reject) => {
+      const id = `venice-sync-studio-test-${crypto.randomUUID()}`, chunk = `${id}.js`
+      const timer = setTimeout(() => reject(new Error("Native Studio test bridge timed out.")), 5000)
+      globalThis.TURBOPACK.push([chunk, id, runtime => {
+        try { clearTimeout(timer); resolve(runtime.r(342219).db) } catch (error) { reject(error) }
+      }])
+      Promise.resolve(globalThis.TURBOPACK.push([chunk, { otherChunks: [], runtimeModuleIds: [id] }])).catch(reject)
+    })
+    if (db.name !== "venice-db-encrypted" || db.verno !== 31) throw new Error("Unsupported Studio test repository.")
+    const tablePrefix = kind === "image" ? "studioImage" : "studioAudio"
+    const names = [`${tablePrefix}Sessions`, `${tablePrefix}Turns`, `${tablePrefix}TurnMedia`]
+    const [sessionTable, turnTable, mediaTable] = names.map(name => db[name])
+    const owner = globalThis.Clerk?.user?.id
+    const sessions = (await sessionTable.where("ownerId").equals(owner).toArray()).filter(row => row.name === prefix)
+    if (cleanup) {
+      if (!prefix.startsWith("Venice-Sync-Studio-E2E-")) throw new Error("Unsafe fixture cleanup prefix.")
+      const root = await navigator.storage.getDirectory()
+      for (const session of sessions) {
+        if (!/^[a-f0-9-]{36}$/.test(session.id)) throw new Error("Unsafe fixture session ID.")
+        const turns = await turnTable.where("sessionId").equals(session.id).toArray()
+        const media = await mediaTable.where("sessionId").equals(session.id).toArray()
+        if (turns.length !== 1 || media.length !== (kind === "image" ? 2 : 1) || [...turns, ...media].some(row => row.ownerId !== owner) ||
+            turns[0].prompt !== prefix || media.some(row => !row.fileName.startsWith(`media/${session.id}/${row.id}.`))) {
+          throw new Error("Fixture relationships changed; refusing cleanup.")
+        }
+        await db.transaction("rw", names.map(name => db[name]), async () => {
+          for (const row of media) await mediaTable.delete(row.id)
+          for (const row of turns) await turnTable.delete(row.id)
+          await sessionTable.delete(session.id)
+        })
+        try { await (await root.getDirectoryHandle("media")).removeEntry(session.id, { recursive: true }) }
+        catch (error) { if (error.name !== "NotFoundError") throw error }
+        try {
+          const thumbnails = await root.getDirectoryHandle("thumbnails")
+          for await (const name of thumbnails.keys()) if (name.startsWith(`${session.id}_`)) await thumbnails.removeEntry(name)
+        } catch (error) { if (error.name !== "NotFoundError") throw error }
+      }
+    }
+    const fingerprint = {}
+    for (const name of ["studioImageSessions", "studioImageTurns", "studioImageTurnMedia", "studioAudioSessions", "studioAudioTurns", "studioAudioTurnMedia"]) {
+      const rows = (await db[name].toArray()).sort((a, b) => String(a.id).localeCompare(String(b.id)))
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(rows)))
+      fingerprint[name] = { count: rows.length, sha256: [...new Uint8Array(digest)].map(n => n.toString(16).padStart(2, "0")).join("") }
+    }
+    return { fingerprint, ids: cleanup ? [] : sessions.map(row => row.id) }
+  }, { prefix, cleanup, kind })
+}
+
+async function studioSessionTransferTest(context, kind = "image") {
+  const page = await context.newPage()
+  await page.goto("https://venice.ai/chat/agent", { waitUntil: "domcontentloaded" })
+  await waitForSignedInVenice(page); await page.bringToFront()
+  const prefix = `Venice-Sync-Studio-E2E-${kind}-${Date.now()}`, stateOf = (cleanup = false) => studioTestState(page, prefix, cleanup, kind)
+  const before = await stateOf()
+  const fixture = (await syntheticLibraryFiles(page, prefix))[kind === "image" ? 0 : 1]
+  const sessionId = crypto.randomUUID(), turnId = crypto.randomUUID(), mediaIds = [crypto.randomUUID(), crypto.randomUUID()]
+  const media = kind === "image" ? mediaIds.map((id, index) => ({
+    id, sessionId, turnId, createdAtUnixTimestamp: 2, mimeType: "image/png", fileName: `media/${sessionId}/${id}.png`,
+    mediaRole: index ? "output" : "input", ...(index ? { modelId: "venice-sync-test", modelName: "Synthetic test", prompt: prefix,
+      source: "edit", imageSettings: { width: 32, height: 32, format: "png" } } : { inputIndex: 0 }),
+  })) : [{
+    id: mediaIds[1], sessionId, turnId, createdAtUnixTimestamp: 2, mimeType: "audio/wav", fileName: `media/${sessionId}/${mediaIds[1]}.wav`,
+    modelId: "venice-sync-test", modelName: "Synthetic silent audio", prompt: prefix, effectivePrompt: prefix,
+    lyricsPrompt: "", audioSettings: { musicSubcategory: "music", forceInstrumental: true, durationSeconds: 4 },
+    coverAssetPath: "/images/VeniceKeys_circle_blue.svg", durationSeconds: 4,
+  }]
+  const manifest = {
+    format: "venice-sync-studio-session", version: 1, kind, exportedAt: new Date().toISOString(),
+    session: { id: sessionId, type: kind === "image" ? "edit" : "audio-generate", name: prefix,
+      [kind === "image" ? "selectedImageId" : "selectedAudioId"]: mediaIds[1], createdAtUnixTimestamp: 1, updatedAtUnixTimestamp: 3 },
+    turns: [{ id: turnId, sessionId, createdAtUnixTimestamp: 2, prompt: prefix, ...(kind === "image" ? { mode: "edit",
+      input: { id: mediaIds[0], mimeType: "image/png", fileName: media[0].fileName } } :
+      { effectivePrompt: prefix, lyricsPrompt: "", settings: { musicSubcategory: "music", forceInstrumental: true, durationSeconds: 4 } }) }],
+    media, files: media.map(row => ({ id: row.id, path: row.fileName, mimeType: row.mimeType, size: fixture.buffer.length,
+      sha256: createHash("sha256").update(fixture.buffer).digest("hex") })),
+  }
+  let zip = zipSync({ "manifest.json": strToU8(JSON.stringify(manifest)), ...Object.fromEntries(media.map(row => [row.fileName, fixture.buffer])) })
+  const host = page.locator(`#${hostId}`), launcher = host.getByRole("button", { name: "Venice Sync", exact: true })
+  const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true }), requests = [], mediaRequests = [], pageErrors = []
+  page.on("pageerror", error => pageErrors.push(error.message))
+  page.on("request", request => {
+    if (request.url().startsWith("blob:") && request.resourceType() === "media") mediaRequests.push(request.url())
+    if (request.method() !== "GET" && /(?:\/(?:inference|publish|responses|completions)(?:\/|$)|mind.*(?:chat|stream|infer|publish))/i.test(new URL(request.url()).pathname)) requests.push(new URL(request.url()).pathname)
+  })
+  const open = async () => {
+    await launcher.click(); await navigatePanel(dialog, "Library Assets")
+    await dialog.getByRole("button", { name: "Studio Sessions", exact: true }).click()
+    await dialog.getByTestId("studio-session-list").waitFor({ state: "visible", timeout: 45_000 })
+    assert.deepEqual(await dialog.getByRole("region", { name: "Studio session transfer" }).getByRole("alert").allTextContents(), [])
+  }
+  let activeSelection
+  try {
+    await open()
+    await dialog.getByLabel("Import Studio session", { exact: true }).setInputFiles({ name: "session.zip", mimeType: "application/zip", buffer: Buffer.from(zip) })
+    await dialog.getByTestId("studio-import-preview").waitFor()
+    await dialog.getByRole("button", { name: "Cancel Studio import", exact: true }).click()
+    assert.deepEqual((await stateOf()).fingerprint, before.fingerprint, "Preview/cancel modified storage.")
+    for (let copy = 0; copy < 2; copy++) {
+      await dialog.getByLabel("Import Studio session", { exact: true }).setInputFiles({ name: "session.zip", mimeType: "application/zip", buffer: Buffer.from(zip) })
+      await dialog.getByTestId("studio-import-preview").waitFor()
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 60_000 }),
+        dialog.getByRole("button", { name: "Confirm import as new Studio session", exact: true }).click(),
+      ])
+      await waitForSignedInVenice(page); await open()
+      const state = await stateOf()
+      assert.equal(state.ids.length, copy + 1)
+      const cards = dialog.locator("[data-studio-session-id]").filter({ hasText: prefix })
+      const [download] = await Promise.all([page.waitForEvent("download"), cards.first().getByRole("button", { name: "Export Studio session ZIP", exact: true }).click()])
+      try {
+        const chunks = [], stream = await download.createReadStream()
+        assert.ok(stream)
+        for await (const chunk of stream) chunks.push(chunk)
+        zip = Buffer.concat(chunks)
+      } finally { await download.delete() }
+      const entries = unzipSync(zip), output = JSON.parse(strFromU8(entries["manifest.json"]))
+      assert.equal(output.turns[0].prompt, prefix)
+      assert.equal(output.kind, kind)
+      if (kind === "image") {
+        assert.equal(output.session.selectedImageId, output.media.find(row => row.mediaRole === "output").id)
+        assert.equal(output.turns[0].input.id, output.media.find(row => row.mediaRole === "input").id)
+      } else {
+        assert.equal(output.session.selectedAudioId, output.media[0].id)
+        assert.deepEqual(output.turns[0].settings, manifest.turns[0].settings)
+        assert.deepEqual(output.media[0].audioSettings, manifest.media[0].audioSettings)
+      }
+      assert.ok(!JSON.stringify(output).includes("ownerId"))
+      assert.notEqual(output.session.id, sessionId)
+      for (const file of output.files) {
+        assert.deepEqual(Buffer.from(entries[file.path]), fixture.buffer)
+        assert.equal(createHash("sha256").update(entries[file.path]).digest("hex"), file.sha256)
+      }
+    }
+    const fixtureIds = (await stateOf()).ids
+    activeSelection = await page.evaluate(({ id, type }) => {
+      const owner = globalThis.Clerk?.user?.id
+      if (!owner) throw new Error("Missing test account.")
+      const key = `studio_active_session_${type}_${owner}`, previous = localStorage.getItem(key)
+      localStorage.setItem(key, id)
+      return { key, previous, id }
+    }, { id: fixtureIds[0], type: kind === "image" ? "edit" : "audio-generate" })
+    mediaRequests.length = 0
+    await page.goto(`https://venice.ai/studio/${kind === "image" ? "edit" : "audio"}`, { waitUntil: "domcontentloaded" })
+    await waitForSignedInVenice(page)
+    if (kind === "image") {
+      await page.waitForFunction(async expectedHash => {
+        const images = [...document.querySelectorAll('img[src^="blob:"]')].filter(image => image.complete && image.naturalWidth === 32 && image.checkVisibility())
+        for (const image of images) {
+          const bytes = await (await fetch(image.src)).arrayBuffer()
+          const digest = await crypto.subtle.digest("SHA-256", bytes)
+          const hash = [...new Uint8Array(digest)].map(n => n.toString(16).padStart(2, "0")).join("")
+          if (hash === expectedHash) return true
+        }
+        return false
+      }, createHash("sha256").update(fixture.buffer).digest("hex"), { timeout: 30_000 })
+    } else {
+      await page.waitForFunction(() => [...document.querySelectorAll("audio")].some(audio => audio.currentSrc.startsWith("blob:")), undefined, { timeout: 15_000 }).catch(async error => {
+        if (mediaRequests.length) return
+        const play = page.getByRole("button", { name: /Play|播放/i }).first()
+        if (!await play.count()) throw error
+        await Promise.all([
+          page.waitForEvent("request", { predicate: request => request.url().startsWith("blob:") && request.resourceType() === "media", timeout: 15_000 }),
+          play.click(),
+        ])
+      })
+      const url = mediaRequests.at(-1) ?? await page.locator("audio").first().evaluate(audio => audio.currentSrc)
+      assert.ok(url?.startsWith("blob:"), "Native Studio has no playable original audio.")
+      const audioBytes = await page.evaluate(async url => [...new Uint8Array(await (await fetch(url)).arrayBuffer())], url)
+      assert.deepEqual(Buffer.from(audioBytes), fixture.buffer)
+    }
+    assert.equal(requests.length, 0)
+  } catch (error) {
+    await page.screenshot({ path: path.join(root, `test-results/studio-${kind}-failure.png`) })
+    console.error("Native Studio test diagnostics:", JSON.stringify({
+      kind, route: new URL(page.url()).pathname, pageErrors, mediaRequests: mediaRequests.length,
+      selectionMatches: activeSelection ? await page.evaluate(({ key, id }) => localStorage.getItem(key) === id, activeSelection) : null,
+    }))
+    throw error
+  } finally {
+    if (activeSelection) await page.evaluate(({ key, previous, id }) => {
+      if (localStorage.getItem(key) === id) {
+        if (previous === null) localStorage.removeItem(key)
+        else localStorage.setItem(key, previous)
+      }
+    }, activeSelection)
+    await page.goto("https://venice.ai/chat/agent", { waitUntil: "domcontentloaded" })
+    await waitForSignedInVenice(page)
+    assert.deepEqual((await stateOf(true)).fingerprint, before.fingerprint, "Studio cleanup changed existing data.")
+  }
+  return { kind, sessionArchiveRoundTrip: "passed", originalBytesAndHashes: "matched", newSessionCopies: "passed",
+    previewAndCancelReadOnly: "passed", nativeRecordsAndFilesCleanup: "passed", existingRecordsFingerprints: "unchanged",
+    nativeEditorOriginalVisible: "passed", inferenceOrPublishRequests: 0, scriptEvaluatedByPlaywright: false }
+}
+
 async function main() {
   if (selectedConversation && !transfer) throw new Error("--conversation requires the explicit --transfer opt-in.")
   if (selectedAgentic && !agenticTransfer) throw new Error("--agentic-conversation requires --agentic-transfer.")
@@ -1470,6 +1667,9 @@ async function main() {
     if (mindPackage) result.mindPackage = await completeMindPackageTest(context)
     if (charactersTransfer) result.characters = await characterTransferTest(context, selectedCharacter)
     if (libraryTransfer) result.library = await libraryTransferTest(context)
+    if (studioTransfer) result.studioSessions = {
+      image: await studioSessionTransferTest(context), audio: await studioSessionTransferTest(context, "audio"),
+    }
     const artifact = await readFile(path.join(root, "dist/venice-sync.user.js"))
     const report = {
       timestamp: new Date().toISOString(),
@@ -1477,8 +1677,8 @@ async function main() {
       artifactSha256: createHash("sha256").update(artifact).digest("hex"),
       installedViaTampermonkeyUiThisRun: install,
       ...result,
-      veniceRecordContentsReadByTest: transfer || mindTransfer || mindPackage || agenticTransfer || charactersTransfer || libraryTransfer,
-      veniceStorageWrittenByTest: transfer || mindTransfer || mindPackage || agenticTransfer || charactersTransfer || libraryTransfer,
+      veniceRecordContentsReadByTest: transfer || mindTransfer || mindPackage || agenticTransfer || charactersTransfer || libraryTransfer || studioTransfer,
+      veniceStorageWrittenByTest: transfer || mindTransfer || mindPackage || agenticTransfer || charactersTransfer || libraryTransfer || studioTransfer,
     }
     await writeFile(
       path.join(root, "test-results/e2e-result.json"),

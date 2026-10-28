@@ -464,6 +464,48 @@ image/video/music 类型，并明确标识 `Imported Library asset`，
 [原生列表与导入事务](../src/venice-library.ts)、
 [受限 OPFS 操作](../src/library-files.ts)。
 
+### 8.3 经典 Studio 可编辑 Session
+
+Library 的单资产传输保持不变；另一个入口 **Library Assets > Studio Sessions**
+归档整个经典图片/音频会话。实现见 [格式](../src/studio-session-format.ts)、
+[原生适配器](../src/venice-studio.ts)。原始调查见
+[Studio Sessions 调查报告](studio-sessions-investigation.md)。
+
+图片表：`studioImageSessions` / `studioImageTurns` / `studioImageTurnMedia`；
+音频表：`studioAudioSessions` / `studioAudioTurns` / `studioAudioTurnMedia`。
+三层关系是 Session → Turn → Media，均采用当前 Clerk `ownerId`。
+运行中的原生 Dexie 返回解密后的逻辑行，导入时由同一个原生仓库重新加密；
+不是把 `__encryptedData` 或源浏览器密钥搬到目标。
+
+图片会话 `type=generate|edit`，`selectedImageId` 指向媒体行；
+编辑 Turn 的 `input={id,fileName,mimeType}` 也必须对应同会话媒体，不能遗漏输入原件。
+输出 `mediaRole=output`，输入 `mediaRole=input`。图片文件在
+`media/{sessionId}/{mediaId}.{ext}`，可重建的原生 Studio 缩略图为
+`thumbnails/{sessionId}_{mediaId}_thumb.jpg`，不等同于单资产导入的 `_thumb500.jpg`。
+
+音频会话 `type=audio-generate`，`selectedAudioId` 指向音频媒体。
+Turn 保留 `prompt/effectivePrompt/lyricsPrompt/settings`，
+媒体保留模型、`audioSettings`、时长以及已识别的句子/单词字幕结构。
+当前音频源表为空，因此其字段证据来自当前公开下发的原生 producer；
+使用合成 WAV 会话验证了原生写入、再导出和原生编辑器读取，没有付费生成。
+`sourceAudio` 实际指向账户级 `media/audio-studio-source-{ownerId}/attachments/…`，
+克隆声音也可能绑定账户，因此本版明确拒绝这些引用，不凭空重建。
+音频本地封面通常位于 `audio-thumbnails/{sessionId}_{mediaId}.webp`；
+本版只接受原生默认封面或无封面，遇到自定义/远程封面整份拒绝，避免丢失资源。
+
+ZIP 的 `manifest.json` 内联会话/turn/media 数据及文件清单，原件保留在
+`media/…` 路径；不迁移账户偏好、active-session localStorage 或生成任务。
+导入为三个层级生成新 UUID，只重写已验证的引用字段和文件路径，不能对用户
+prompt 内容做字符串替换。先解码/校验、再写新 OPFS 命名空间，最后在原生 Dexie
+单事务中 `add` 对应三张表；失败清理仅限本次新目录/缓存。确认页提示成功后重载。
+未知字段、跨会话引用、无产出的未完成 turn、缺失原件和不支持的资源都会显式失败。
+导出前后比较记录快照，不能保证与并发编辑/生成互斥；应先结束操作再导出。
+
+新编排器 `studioProjects/studioOutputs`、视频 Session 仍未实现，不能把它们
+当作普通图片/音频 Session 迁移。原生 UI 的 active-session key 是
+`studio_active_session_{generate|edit|audio-generate}_{ownerId}`，
+对应 `/studio/image`、`/studio/edit`、`/studio/audio`；正常导入不修改这些偏好。
+
 ## 9. 本项目的归档与一致性边界
 
 | 内容 | 当前格式与上限 | 当前范围 |
@@ -474,6 +516,7 @@ image/video/music 类型，并明确标识 `Imported Library asset`，
 | Mind 定义 | `venice-sync-mind` v1 ZIP | 定义、原始资源、所有已保存的 Assistant/Preview 历史 |
 | Character | Venice 原生 schemaVersion `"1"` JSON；8 MiB | 定义、内嵌头像、设置与已保存上下文文本 |
 | Library 资产 | `venice-sync-library-asset` v1 ZIP；原文件 100 MiB、元信息 8 MiB、ZIP 128 MiB | 单个原始图片/视频/音频及来源元信息；独立副本，不迁移源项目 |
+| 经典 Studio Session | `venice-sync-studio-session` v1 ZIP；总量 128 MiB、原文件 100 MiB、元信息 8 MiB、2048 原件 | 可编辑图片/普通音频 Session、turn、媒体、图片输入原件；不包含 beta/video、音频 sourceAudio/克隆声音/自定义封面 |
 
 Mind ZIP 限制：压缩/展开总量 128 MiB、单文件 25 MiB、元信息 8 MiB、
 最多 2048 个资源文件，逐文件校验大小和 SHA-256。路径和归属也必须校验；
@@ -490,6 +533,7 @@ SHA-256 只检查内容一致性，**不证明归档来自可信作者**。
 | 完整 Mind | 先文件/辅助数据/编辑器历史，最后定义；失败定向清理 | 原生 RxDB 更新 |
 | Character | 先新头像，后原生 Dexie add；失败定向清理 | 成功后重载同一页面 |
 | Library 资产 | 先原文件/缩略图，后单个 Dexie 多表 add 事务；失败定向清理 | 成功后重载同一页面 |
+| 经典 Studio Session | 先原文件/图片缓存，后一个原生 Dexie 三表 add 事务；失败定向清理 | 成功后重载同一页面 |
 
 所有导入都创建新副本，重新绑定当前账户并重建必要引用，不覆盖原记录。
 但 RxDB 多 collection 与 OPFS 不存在一个通用跨系统事务；

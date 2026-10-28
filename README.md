@@ -5,7 +5,8 @@ Tampermonkey**. Its WebUI organizes local content into four categories:
 conversations, Library assets, Mind definitions and Characters. Classic / Mind /
 Agentic text-history JSON, complete local Mind ZIP packages, and native Character
 JSON import/export work today, together with original Library image/video/audio
-asset ZIP import/export.
+asset ZIP import/export. Classic Studio image/audio sessions can also be
+transferred as editable session ZIPs, separately from individual Library assets.
 Cloud synchronization is not implemented.
 
 ## Storage model
@@ -43,6 +44,7 @@ The dialog opens on **Overview**, showing what can be downloaded or uploaded:
 | Conversations: Mind text / reasoning | JSON available | JSON available; existing destination Mind required |
 | Conversations: Agentic text / reasoning | JSON available | JSON available; creates an independent Agentic chat |
 | Library Assets (generated images / videos / audio) | Single-asset ZIP available | ZIP or media file; creates an independent local copy |
+| Library > Studio Sessions (classic image / audio) | Session ZIP available | ZIP; creates a new editable session |
 | Mind definitions + resources + all saved Builder / Preview histories | ZIP available | ZIP available; creates a new local unpublished Mind |
 | Characters: local definitions + embedded portraits/context | Native JSON available | Native JSON available; creates a new private local Character |
 
@@ -128,6 +130,47 @@ frames at most 64 megapixels, and a 15-second media-load timeout. Supported MIME
 types: PNG/JPEG/WebP/GIF/AVIF/BMP; MP4/WebM/QuickTime; MPEG/WAV/OGG/MP4/FLAC/WebM/AAC
 audio. Playback depends on Chrome's codecs. SVG, documents and remote-file
 references are not imported.
+
+## Editable Studio session transfer
+
+Open **Library Assets > Studio Sessions**, then download one classic image or
+audio session ZIP. The separate **Assets** view keeps its original asset-only
+behavior. A `venice-sync-studio-session` v1 ZIP contains `manifest.json` with the
+session/turn/media records and a manifest of every original, plus unchanged
+`media/{sessionId}/{mediaId}.{ext}` files. Image-edit input originals are included,
+not just generated outputs. Prompts, settings, timestamps, supported audio
+subtitles and selected-media references are preserved.
+
+Select **Upload Studio session**, review, and explicitly confirm a new copy.
+Preview/cancel never writes. Import assigns fresh UUIDs and current Clerk
+ownership, rewrites session/turn/media IDs, selections and nested image-input
+paths, validates media decoding, writes originals and generated image
+`_thumb.jpg` caches, then uses one native Dexie add-only transaction for the
+three matching image/audio tables. The native repository handles destination
+encryption; no source key is archived. Failure rolls back the database transaction
+and cleans only this import's new file namespace; incomplete cleanup is explicit.
+Success reloads the same URL. Save drafts and finish ongoing generation first.
+No generation, inference, publishing or account-preference import is performed.
+
+Only the observed classic Dexie v31 (IndexedDB 310) format is supported.
+Image generation/edit sessions and ordinary audio sessions are supported.
+Audio source-file attachments, account-bound cloned voices (`vv_*`), custom or
+remote album covers, unknown subtitle shapes, foreign/missing file references,
+incomplete turns without outputs, jobs and unknown native fields are rejected
+explicitly rather than producing a partial archive. Beta RxDB projects/outputs
+and video sessions remain unsupported. Exports verify that records did not change
+during the snapshot; this is not a lock against simultaneous edits/generation.
+
+Limits: ZIP and total expanded content 128 MiB, each original 100 MiB, JSON
+metadata 8 MiB, 2048 originals and 10000 turns. Every original is checked by byte
+size and SHA-256. Archives contain private prompts/settings in plaintext: keep
+them private. Native-editor tests use synthetic image and silent-audio sessions,
+preserve original-record fingerprints and restore the previous active-session
+selection; no paid generation is needed.
+
+See the [Studio investigation](docs/studio-sessions-investigation.md) for the
+original findings and the [storage model](docs/venice-storage-model.md#83-经典-studio-可编辑-session)
+for the implemented boundaries.
 
 ## Basic Classic conversation transfer
 
@@ -467,6 +510,10 @@ npm run test:e2e -- --install --characters
 # original-data fingerprints and targeted test-file cleanup.
 npm run test:e2e -- --install --library
 
+# Classic Studio image/edit + ordinary audio session ZIP import/export/reimport,
+# native editors/original media, read-only cancel and targeted fixture cleanup.
+npm run test:e2e -- --install --studio-sessions
+
 # Optionally verify a selected current-account Character via a temporary copy,
 # with its original record and portrait fingerprints unchanged.
 npm run test:e2e -- --characters --character=LOCAL_CHARACTER_ID
@@ -520,6 +567,9 @@ otherwise install manually using the instructions above and retry.
 - `src/CharacterTransfer.tsx`: local role list/portraits and native JSON import preview.
 - `src/character-format.ts`: portable native Character JSON and private-copy policy.
 - `src/venice-characters.ts`: native Dexie/parser/portrait integration and targeted cleanup.
+- `src/StudioTransfer.tsx`: editable Studio session lists and ZIP preview/confirmation.
+- `src/studio-session-format.ts`: bounded image/audio session ZIP validation and checksums.
+- `src/venice-studio.ts`: native session snapshots, fresh references and add-only transactions.
 - `src/MindDefinitionTransfer.tsx`: complete Mind ZIP preview, history options and copy import.
 - `src/mind-package-format.ts`: archive limits, manifest/association validation and checksums.
 - `src/mind-package-storage.ts`: scoped existing-only reads and generated-directory OPFS writes/cleanup.

@@ -10,7 +10,9 @@ import { listMindHistory } from "./venice-mind-history"
 import { listMindDefinitions } from "./venice-mind-package"
 import { listCharacters } from "./venice-characters"
 import { listLibraryAssets } from "./venice-library"
+import { listStudioSessions } from "./venice-studio"
 
+vi.mock("./venice-studio", () => ({ listStudioSessions: vi.fn(), exportStudioSession: vi.fn(), importStudioSession: vi.fn() }))
 vi.mock("./venice-library", () => ({
   listLibraryAssets: vi.fn(), readLibraryAsset: vi.fn(), exportLibraryAsset: vi.fn(), importLibraryAsset: vi.fn(),
 }))
@@ -46,6 +48,7 @@ beforeEach(() => {
   vi.mocked(listMindDefinitions).mockResolvedValue([])
   vi.mocked(listCharacters).mockResolvedValue([])
   vi.mocked(listLibraryAssets).mockResolvedValue([])
+  vi.mocked(listStudioSessions).mockResolvedValue([])
   vi.mocked(readStorageOverview).mockResolvedValue({
     origin: "https://venice.ai", readAt: "2026-10-27T05:00:00Z",
     localStorage: { status: "success", data: { entries: [], bytes: 0 } },
@@ -95,6 +98,22 @@ describe("transfer-focused WebUI", () => {
     expect(await screen.findByText("No local Characters in this account.")).toBeVisible()
     expect(screen.getByRole("button", { name: "Upload Character file" })).toBeVisible()
     expect(listClassicConversations).not.toHaveBeenCalled()
+  })
+
+  it("keeps complete Studio sessions separate from asset-only transfer and loads them lazily", async () => {
+    const user = userEvent.setup()
+    render(<SyncPanel {...props} />)
+    await navigate("Library Assets")
+    await screen.findByText("No generated Library assets in this account.")
+    expect(listStudioSessions).not.toHaveBeenCalled()
+    await user.click(screen.getByRole("button", { name: "Studio Sessions" }))
+    expect(await screen.findByText("No classic Studio sessions in this account.")).toBeVisible()
+    expect(screen.getByRole("button", { name: "Upload Studio session" })).toBeVisible()
+    expect(screen.getByRole("button", { name: "Upload Library asset", hidden: true })).not.toBeVisible()
+    await user.click(screen.getByRole("button", { name: "Assets" }))
+    expect(screen.getByRole("button", { name: "Upload Library asset" })).toBeVisible()
+    expect(listLibraryAssets).toHaveBeenCalledOnce()
+    expect(listStudioSessions).toHaveBeenCalledOnce()
   })
 
   it("shows a unified mixed-type history list separately from Mind definitions", async () => {

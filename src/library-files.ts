@@ -39,7 +39,7 @@ export function browserLibraryFiles(): LibraryFiles {
       return false
     },
     async write(path, value) {
-      if (!/^(?:media\/[a-f0-9-]{36}\/[a-f0-9-]{36}\.[a-z0-9]+|thumbnails\/[a-f0-9-]{36}_[a-f0-9-]{36}_thumb500\.jpg)$/.test(path)) {
+      if (!/^(?:media\/[a-f0-9-]{36}\/[a-f0-9-]{36}\.[a-z0-9]+|thumbnails\/[a-f0-9-]{36}_[a-f0-9-]{36}_thumb(?:500)?\.jpg)$/.test(path)) {
         throw new Error("Refusing to write outside a generated Library namespace.")
       }
       const parts = path.split("/"), name = parts.pop()

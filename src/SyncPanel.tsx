@@ -7,6 +7,7 @@ import { ConversationTransfer } from "./ConversationTransfer"
 import { MindDefinitionTransfer } from "./MindDefinitionTransfer"
 import { CharacterTransfer } from "./CharacterTransfer"
 import { LibraryTransfer } from "./LibraryTransfer"
+import { StudioTransfer } from "./StudioTransfer"
 import type { RuntimeInfo } from "./runtime"
 import { StorageOverview } from "./StorageOverview"
 import { VeniceCharactersIcon, VeniceClassicIcon, VeniceLibraryIcon, VeniceMindIcon } from "./components/VeniceIcons"
@@ -17,7 +18,7 @@ const contentPages = [
     note: "Classic, Mind and Agentic text-history JSON are ready." },
   { id: "assets", title: "Library Assets", Icon: VeniceLibraryIcon, ready: true,
     description: "Assets from your Studio / Library.",
-    note: "Original image/video/audio files and source metadata. Restore independent Library copies, not source projects." },
+    note: "Independent Library originals, or complete editable classic Studio session ZIPs. Beta projects are not supported." },
   { id: "mind", title: "Mind", Icon: VeniceMindIcon, ready: true,
     description: "Mind definitions, separate from Mind conversation histories.",
     note: "Complete definition ZIP with resources, Assistant and Preview histories. Ordinary chats stay in Conversations." },
@@ -89,6 +90,8 @@ export function SyncPanel({ runtime, clicks, onTestInteraction, reloadPage }: Sy
   const [mindOpened, setMindOpened] = useState(false)
   const [charactersOpened, setCharactersOpened] = useState(false)
   const [libraryOpened, setLibraryOpened] = useState(false)
+  const [studioOpened, setStudioOpened] = useState(false)
+  const [libraryMode, setLibraryMode] = useState<"assets" | "sessions">("assets")
   const navigation = useRef<HTMLElement>(null)
   const navigate = (next: Page) => {
     if (next === "conversations") setConversationsOpened(true)
@@ -146,7 +149,14 @@ export function SyncPanel({ runtime, clicks, onTestInteraction, reloadPage }: Sy
         {conversationsOpened && <div hidden={page !== "conversations"}><ConversationTransfer reloadPage={reloadPage} /></div>}
         {mindOpened && <div hidden={page !== "mind"}><MindDefinitionTransfer /></div>}
         {charactersOpened && <div hidden={page !== "characters"}><CharacterTransfer reloadPage={reloadPage} /></div>}
-        {libraryOpened && <div hidden={page !== "assets"}><LibraryTransfer reloadPage={reloadPage} /></div>}
+        {libraryOpened && <div hidden={page !== "assets"} className="grid gap-5">
+          <div role="group" aria-label="Library transfer scope" className="flex gap-2">
+            <Button variant={libraryMode === "assets" ? "secondary" : "ghost"} aria-pressed={libraryMode === "assets"} onClick={() => setLibraryMode("assets")}>Assets</Button>
+            <Button variant={libraryMode === "sessions" ? "secondary" : "ghost"} aria-pressed={libraryMode === "sessions"} onClick={() => { setStudioOpened(true); setLibraryMode("sessions") }}>Studio Sessions</Button>
+          </div>
+          <div hidden={libraryMode !== "assets"}><LibraryTransfer reloadPage={reloadPage} /></div>
+          {studioOpened && <div hidden={libraryMode !== "sessions"}><StudioTransfer reloadPage={reloadPage} /></div>}
+        </div>}
         {page === "details" && <DetailsPage runtime={runtime} clicks={clicks} onTestInteraction={onTestInteraction} />}
       </div>
     </div>

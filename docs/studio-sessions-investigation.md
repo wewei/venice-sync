@@ -4,7 +4,7 @@
 Playwright）中实际操作 `/studio/image` 完成一次图片生成，随后直接读取
 IndexedDB / OPFS 原始数据；结合已导出的 30 个 RxDB collection schema
 （`studio-schemas.json`）与全库 inventory（`studio-inventory.json`）交叉验证。
-本文记录观察结果，不实现任何迁移代码。
+本文记录最初调查结果；后续实现状态与补充验证见文末 §7。
 
 ## 1. 结论速览
 
@@ -173,3 +173,24 @@ venice-sync-studio-session v1 (ZIP)
 - 原始数据文件（inventory/schemas/OPFS 清单）存于本次调查会话目录，
   仓库内保留本报告的文字结论；如需原始 JSON 可在同环境重跑
   `~/.copilot/session-state/9a6a4efc-*/files/studio-inspect.mjs`。
+
+## 7. 后续实现与补充验证（2026-10-28）
+
+已实现经典图片/普通音频 Session ZIP 传输，入口为
+**Library Assets > Studio Sessions**，与原来的单资产 Library 视图分开。
+具体用法、上限和明确拒绝的资源见 [README](../README.md#editable-studio-session-transfer)
+及 [存储模型 §8.3](venice-storage-model.md#83-经典-studio-可编辑-session)。
+
+补充观察：通过运行中的原生 Dexie 读取到了已解密图片 Session/Turn/Media，
+确认 `selectedImageId`、编辑输入 `input={id,fileName,mimeType}`、
+`mediaRole=input|output` 和同会话 OPFS 路径。图片输入原件与输出一起归档。
+音频表仍为空；当前原生 producer 确认音频 `type=audio-generate`、
+`selectedAudioId`、Turn 的 settings/effectivePrompt/lyricsPrompt，
+以及媒体的 audioSettings/subtitle/durationSeconds。并非真实音频生成实测。
+
+真实 Chrome + 已安装 Tampermonkey 验证了合成图片编辑会话与合成静音 WAV 会话的
+预览/取消、导入、导出、再次导入、字节/SHA-256、一致引用、原生编辑器读取与定向清理。
+原记录指纹不变，无推理或发布请求；没有以注入 bundle 冒充油猴运行。
+
+第一版对音频 `sourceAudio`（账户级附件目录）、账户绑定克隆声音、自定义/远程封面、
+未知字幕形状明确拒绝，不会静默丢弃。新编排器与视频 Session 继续等待专门调查。
