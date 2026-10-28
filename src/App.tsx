@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog"
 import type { RuntimeInfo } from "./runtime"
 import { SyncPanel } from "./SyncPanel"
+import { SidebarLauncher } from "./SidebarLauncher"
 
 interface AppProps {
   runtime: RuntimeInfo
@@ -19,12 +20,14 @@ interface AppProps {
 
 export function App({ runtime, portalContainer }: AppProps) {
   const [clicks, setClicks] = useState(0)
+  const [open, setOpen] = useState(false)
   const launcher = useRef<HTMLButtonElement>(null)
+  const returnFocus = useRef<HTMLElement | undefined>(undefined)
   const panel = useRef<HTMLDivElement>(null)
 
   return (
-    <Dialog modal={false}>
-      <DialogTrigger asChild>
+    <Dialog modal={false} open={open} onOpenChange={setOpen}>
+      {runtime.mode === "preview" ? <DialogTrigger asChild>
         <Button
           ref={launcher}
           className="pointer-events-auto fixed right-6 bottom-6 gap-2"
@@ -33,18 +36,22 @@ export function App({ runtime, portalContainer }: AppProps) {
           <IconArrowsExchange aria-hidden="true" />
           Venice Sync
         </Button>
-      </DialogTrigger>
+      </DialogTrigger> : <SidebarLauncher buttonRef={launcher} expanded={open} onOpen={(element) => { returnFocus.current = element; setOpen(true) }} onClose={() => setOpen(false)} />}
       <DialogContent
         portalContainer={portalContainer}
         className="pointer-events-auto flex h-[min(54rem,calc(100dvh-2rem))] max-h-[calc(100dvh-2rem)] flex-col gap-6 overflow-hidden p-5 sm:max-w-[min(72rem,calc(100vw-4rem))] sm:p-7"
         onFocusOutside={(event) => event.preventDefault()}
+        onPointerDownOutside={(event) => {
+          if (launcher.current && event.detail.originalEvent.composedPath().includes(launcher.current)) event.preventDefault()
+        }}
         onOpenAutoFocus={(event) => {
           event.preventDefault()
           panel.current?.querySelector<HTMLButtonElement>('[aria-current="page"]')?.focus()
         }}
         onCloseAutoFocus={(event) => {
           event.preventDefault()
-          launcher.current?.focus()
+          if (launcher.current?.isConnected) launcher.current.focus()
+          else if (returnFocus.current?.isConnected) returnFocus.current.focus()
         }}
       >
         <DialogHeader className="shrink-0 pr-8">

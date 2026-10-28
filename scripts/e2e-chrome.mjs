@@ -13,6 +13,7 @@ const extensionOrigin =
   `chrome-extension://${process.env.TM_EXTENSION_ID || "dhdgffkkebhmkfjojejmpbldmpobfkfo"}`
 const scriptUrl = "http://127.0.0.1:4173/venice-sync.user.js"
 const hostId = "venice-sync-userscript-host"
+const launcherId = "venice-sync-sidebar-launcher"
 const install = process.argv.includes("--install")
 const transfer = process.argv.includes("--transfer")
 const mindTransfer = process.argv.includes("--mind-transfer")
@@ -57,7 +58,7 @@ async function installScript(context) {
   const sourcePage = await context.newPage()
   console.log("Opening the built userscript in Tampermonkey.")
   try {
-    await sourcePage.goto(scriptUrl, {
+    await sourcePage.goto(`${scriptUrl}?build=${createHash("sha256").update(artifact).digest("hex")}`, {
       waitUntil: "domcontentloaded",
       timeout: 30_000,
     })
@@ -152,6 +153,35 @@ async function waitForSignedInVenice(page) {
   await page.waitForFunction(() => window.Clerk?.loaded &&
     typeof window.Clerk?.user?.id === "string" &&
     typeof window.Clerk?.session?.getToken === "function", undefined, { timeout: 45_000 })
+}
+
+async function ensureNativeSidebar(page) {
+  const show = page.getByRole("button", { name: "Show Sidebar", exact: true })
+  if (await show.isVisible()) await show.click()
+  else {
+    await page.waitForFunction(() => document.querySelector('a[href="/minds"]'), undefined, { timeout: 45_000 })
+    const wordmark = page.locator('svg[viewBox="0 0 549 307"]').filter({ visible: true })
+    if (!await wordmark.count()) {
+      const toggle = page.getByRole("button", { name: /^(?:Toggle sidebar|切换侧边栏)$/i }).filter({ visible: true }).first()
+      if (!await toggle.isVisible()) {
+        await page.mouse.move(400, 200)
+        await page.mouse.move(33, 38)
+      }
+      await toggle.click()
+    }
+  }
+}
+
+async function sidebarLauncher(page) {
+  const launcher = page.locator(`#${launcherId}`).getByRole("button", { name: "Venice Sync", exact: true })
+  if (!await launcher.isVisible()) await ensureNativeSidebar(page)
+  await launcher.waitFor({ state: "visible", timeout: 45_000 })
+  return launcher
+}
+
+async function openSync(page) {
+  await (await sidebarLauncher(page)).click()
+  await page.locator(`#${hostId}`).getByRole("dialog", { name: "Venice Sync", exact: true }).waitFor({ state: "visible" })
 }
 
 async function openUiDiagnostics(dialog) {
@@ -315,13 +345,9 @@ async function smokeTest(context) {
   await page.bringToFront()
 
   const host = page.locator(`#${hostId}`)
-  const launcher = host.getByRole("button", {
-    name: "Venice Sync",
-    exact: true,
-  })
-  await launcher.waitFor({ state: "visible", timeout: 45_000 })
+  await sidebarLauncher(page)
   assert.equal(await host.count(), 1)
-  await launcher.click()
+  await openSync(page)
 
   const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
   await dialog.waitFor({ state: "visible" })
@@ -362,7 +388,7 @@ async function smokeTest(context) {
   await dialog.screenshot({ path: path.join(results, "tampermonkey-details.png") })
   for (let attempt = 0; attempt < 3; attempt += 1) {
     await closeWithPointerCheck(page, dialog)
-    await launcher.click()
+    await openSync(page)
     await openUiDiagnostics(dialog)
     await status.filter({ hasText: "Test clicks: 1" }).waitFor()
   }
@@ -370,9 +396,9 @@ async function smokeTest(context) {
   await dialog.waitFor({ state: "hidden" })
 
   await page.reload({ waitUntil: "domcontentloaded" })
-  await launcher.waitFor({ state: "visible", timeout: 45_000 })
+  await sidebarLauncher(page)
   assert.equal(await host.count(), 1)
-  await launcher.click()
+  await openSync(page)
   await openUiDiagnostics(dialog)
   await status.filter({ hasText: "Test clicks: 0" }).waitFor()
   await checkStorageOverview(page, dialog)
@@ -449,7 +475,7 @@ async function cleanupSyntheticChats(page, ids) {
   }, ids)
 }
 
-async function importWithNativeRefresh(page, dialog, launcher, json, ids) {
+async function importWithNativeRefresh(page, dialog, json, ids) {
   const file = JSON.parse(json)
   const previousIds = new Set(await dialog.locator("[data-conversation-id]").evaluateAll(
     (elements) => elements.map((element) => element.getAttribute("data-conversation-id")),
@@ -471,7 +497,7 @@ async function importWithNativeRefresh(page, dialog, launcher, json, ids) {
     "Import did not automatically reload the page.",
   )
 
-  await launcher.click()
+  await openSync(page)
   await openConversations(dialog)
   await dialog.getByTestId("conversation-list").waitFor({ state: "visible", timeout: 30_000 })
   const matchingIds = await dialog.locator("[data-conversation-id]").evaluateAll(
@@ -499,9 +525,8 @@ async function conversationTransferTest(context) {
   await waitForSignedInVenice(page)
   await page.bringToFront()
   const host = page.locator(`#${hostId}`)
-  const launcher = host.getByRole("button", { name: "Venice Sync", exact: true })
   const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
-  await launcher.click()
+  await openSync(page)
   await openConversations(dialog)
   await dialog.getByTestId("conversation-list").waitFor({ state: "visible", timeout: 30_000 })
   const baseline = await classicCounts(page)
@@ -509,7 +534,7 @@ async function conversationTransferTest(context) {
   fixture.conversation.name = `Venice Sync E2E ${Date.now()}`
   const ids = []
   try {
-    const importFile = (json) => importWithNativeRefresh(page, dialog, launcher, json, ids)
+    const importFile = (json) => importWithNativeRefresh(page, dialog, json, ids)
     const first = await importFile(JSON.stringify(fixture))
     assert.deepEqual(await classicCounts(page), baseline.map((count, index) => count + (index === 0 ? 1 : 2)))
     const downloadReady = page.waitForEvent("download")
@@ -539,7 +564,7 @@ async function conversationTransferTest(context) {
     for (const message of fixture.messages) {
       await page.getByText(message.content, { exact: true }).waitFor({ state: "visible", timeout: 45_000 })
     }
-    await launcher.click()
+    await openSync(page)
     await openConversations(dialog)
     await dialog.getByTestId("conversation-list").waitFor({ state: "visible" })
     await importFile(exportedJson)
@@ -566,9 +591,8 @@ async function selectedConversationTest(context, id) {
   await waitForSignedInVenice(page)
   await page.bringToFront()
   const host = page.locator(`#${hostId}`)
-  const launcher = host.getByRole("button", { name: "Venice Sync", exact: true })
   const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
-  await launcher.click()
+  await openSync(page)
   await openConversations(dialog)
   await dialog.getByTestId("conversation-list").waitFor({ state: "visible", timeout: 30_000 })
   const fingerprint = () => page.evaluate(async (conversationId) => {
@@ -637,7 +661,7 @@ async function selectedConversationTest(context, id) {
   const ids = []
   try {
     const file = { ...original, conversation: { ...original.conversation, name: `${original.conversation.name} [Venice Sync test copy]` } }
-    const { id: copyId, href } = await importWithNativeRefresh(page, dialog, launcher, JSON.stringify(file), ids)
+    const { id: copyId, href } = await importWithNativeRefresh(page, dialog, JSON.stringify(file), ids)
     assert.notEqual(copyId, id)
     const copy = await downloadConversation(copyId)
     assert.equal(messageDigest(copy.messages), expectedMessages, "Copied message data differs from the original export.")
@@ -721,13 +745,12 @@ async function mindHistoryTransferTest(context, agentic = false) {
   await waitForSignedInVenice(page)
   await page.bringToFront()
   const host = page.locator(`#${hostId}`)
-  const launcher = host.getByRole("button", { name: "Venice Sync", exact: true })
   const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
   const openMind = async () => {
     await openConversations(dialog)
     await waitForMindHistory(dialog)
   }
-  await launcher.click()
+  await openSync(page)
   await openMind()
   const baseline = await mindStorageSnapshot(page)
   const fixture = JSON.parse(await readFile(path.join(root, "scripts/fixtures/mind-conversation.json"), "utf8"))
@@ -823,9 +846,8 @@ async function selectedAgenticConversationTest(context, id) {
   await waitForSignedInVenice(page)
   await page.bringToFront()
   const host = page.locator(`#${hostId}`)
-  const launcher = host.getByRole("button", { name: "Venice Sync", exact: true })
   const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
-  await launcher.click()
+  await openSync(page)
   await openConversations(dialog)
   const baseline = await mindStorageSnapshot(page, [], "", id)
   const downloadArchive = async (conversationId) => {
@@ -965,10 +987,9 @@ async function completeMindPackageTest(context) {
   await waitForSignedInVenice(page)
   await page.bringToFront()
   const host = page.locator(`#${hostId}`)
-  const launcher = host.getByRole("button", { name: "Venice Sync", exact: true })
   const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
   const openPackages = async () => {
-    await launcher.click()
+    await openSync(page)
     await navigatePanel(dialog, "Mind")
     await dialog.getByTestId("mind-definition-list").waitFor({ state: "visible", timeout: 45_000 })
   }
@@ -1151,10 +1172,9 @@ async function characterTransferTest(context, sourceId) {
   await waitForSignedInVenice(page)
   await page.bringToFront()
   const host = page.locator(`#${hostId}`)
-  const launcher = host.getByRole("button", { name: "Venice Sync", exact: true })
   const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
   const openCharacters = async () => {
-    await launcher.click()
+    await openSync(page)
     await navigatePanel(dialog, "Characters")
     await dialog.getByTestId("character-list").waitFor({ state: "visible", timeout: 45_000 })
   }
@@ -1343,10 +1363,10 @@ async function libraryTransferTest(context) {
   const page = await context.newPage()
   await page.goto("https://venice.ai/chat/agent", { waitUntil: "domcontentloaded" })
   await waitForSignedInVenice(page); await page.bringToFront()
-  const host = page.locator(`#${hostId}`), launcher = host.getByRole("button", { name: "Venice Sync", exact: true })
+  const host = page.locator(`#${hostId}`)
   const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
   const openLibrary = async () => {
-    await launcher.click(); await navigatePanel(dialog, "Library Assets")
+    await openSync(page); await navigatePanel(dialog, "Library Assets")
     await dialog.getByTestId("library-asset-list").waitFor({ state: "visible", timeout: 45_000 })
     const errors = await dialog.getByRole("region", { name: "Library asset transfer" }).getByRole("alert").allTextContents()
     assert.equal(errors.length, 0, `Library UI errors: ${errors.join("; ")}`)
@@ -1518,7 +1538,7 @@ async function studioSessionTransferTest(context, kind = "image") {
       sha256: createHash("sha256").update(fixture.buffer).digest("hex") })),
   }
   let zip = zipSync({ "manifest.json": strToU8(JSON.stringify(manifest)), ...Object.fromEntries(media.map(row => [row.fileName, fixture.buffer])) })
-  const host = page.locator(`#${hostId}`), launcher = host.getByRole("button", { name: "Venice Sync", exact: true })
+  const host = page.locator(`#${hostId}`)
   const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true }), requests = [], mediaRequests = [], pageErrors = []
   page.on("pageerror", error => pageErrors.push(error.message))
   page.on("request", request => {
@@ -1526,7 +1546,7 @@ async function studioSessionTransferTest(context, kind = "image") {
     if (request.method() !== "GET" && /(?:\/(?:inference|publish|responses|completions)(?:\/|$)|mind.*(?:chat|stream|infer|publish))/i.test(new URL(request.url()).pathname)) requests.push(new URL(request.url()).pathname)
   })
   const open = async () => {
-    await launcher.click(); await navigatePanel(dialog, "Library Assets")
+    await openSync(page); await navigatePanel(dialog, "Library Assets")
     await dialog.getByRole("button", { name: "Studio Sessions", exact: true }).click()
     await dialog.getByTestId("studio-session-list").waitFor({ state: "visible", timeout: 45_000 })
     assert.deepEqual(await dialog.getByRole("region", { name: "Studio session transfer" }).getByRole("alert").allTextContents(), [])
@@ -1635,6 +1655,85 @@ async function studioSessionTransferTest(context, kind = "image") {
     nativeEditorOriginalVisible: "passed", inferenceOrPublishRequests: 0, scriptEvaluatedByPlaywright: false }
 }
 
+async function sidebarLauncherTest(context) {
+  const page = await context.newPage()
+  await page.goto("https://venice.ai/chat/agent", { waitUntil: "domcontentloaded" })
+  await waitForSignedInVenice(page)
+  await page.bringToFront()
+  const originalSize = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))
+  const body = page.locator(`#${hostId}`), dialog = body.getByRole("dialog", { name: "Venice Sync", exact: true })
+  const launcher = page.locator(`#${launcherId}`).getByRole("button", { name: "Venice Sync", exact: true })
+  const nativeToggle = () => page.getByRole("button", { name: /^(?:Toggle sidebar|切换侧边栏)$/i }).filter({ visible: true }).first()
+  const fits = async () => {
+    await page.waitForFunction(id => {
+      const host = document.getElementById(id)
+      if (!host) return false
+      const toggle = host.nextElementSibling, logo = host.previousElementSibling
+      if (!toggle || !logo) return false
+      const h = host.getBoundingClientRect(), l = logo.getBoundingClientRect(), t = toggle.getBoundingClientRect()
+      return h.width === 44 && h.height === 44 && h.left >= l.right + 7 && h.right <= t.left && h.top >= 0
+    }, launcherId)
+    assert.equal(await page.locator(`#${launcherId}`).count(), 1)
+    assert.equal(await body.getByRole("button", { name: "Venice Sync", exact: true }).count(), 0, "A floating body launcher remains.")
+  }
+  try {
+    await sidebarLauncher(page); await fits()
+    await page.locator(`#${launcherId}`).screenshot({ path: path.join(root, "test-results/sidebar-launcher-desktop.png") })
+    await launcher.click(); await dialog.waitFor({ state: "visible" })
+    assert.equal(await launcher.getAttribute("aria-expanded"), "true")
+    await launcher.click(); await dialog.waitFor({ state: "hidden" })
+    assert.equal(await launcher.getAttribute("aria-expanded"), "false")
+    await launcher.focus(); await page.keyboard.press("Enter")
+    await dialog.waitFor({ state: "visible" })
+    await page.keyboard.press("Escape"); await dialog.waitFor({ state: "hidden" })
+    assert.equal(await launcher.evaluate(button => button.getRootNode().activeElement === button), true)
+    await nativeToggle().click()
+    await page.waitForFunction(id => !document.getElementById(id), launcherId)
+    await sidebarLauncher(page); await fits()
+    await page.locator('a[href="/minds"]').filter({ visible: true }).first().click()
+    await page.waitForURL(url => url.pathname === "/minds")
+    await sidebarLauncher(page); await fits()
+    await openSync(page)
+    await page.keyboard.press("Escape"); await dialog.waitFor({ state: "hidden" })
+    await page.goto("https://venice.ai/chat/agent", { waitUntil: "domcontentloaded" })
+    await waitForSignedInVenice(page)
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 844 })
+      const show = page.getByRole("button", { name: "Show Sidebar", exact: true })
+      await show.waitFor({ state: "visible" })
+      await page.waitForFunction(id => !document.getElementById(id), launcherId)
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await show.click(); await launcher.waitFor({ state: "visible" }); await fits()
+        const sidebar = page.locator('[role="dialog"][aria-modal="true"]').filter({ has: page.locator(`#${launcherId}`) })
+        assert.equal(await sidebar.count(), 1)
+        const header = page.locator(`#${launcherId}`).locator("..")
+        await header.screenshot({ path: path.join(root, `test-results/sidebar-launcher-${width}.png`) })
+        await launcher.click()
+        await dialog.waitFor({ state: "visible" })
+        assert.equal(await page.locator('[role="dialog"][aria-modal="true"]').count(), 0, "Native Drawer remains open beneath Sync.")
+        assert.notEqual(await body.getAttribute("aria-hidden"), "true")
+        const bounds = await dialog.boundingBox()
+        assert.ok(bounds && bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= width + 1 && bounds.y + bounds.height <= 845)
+        await dialog.getByRole("button", { name: "Details", exact: true }).click()
+        assert.equal(await dialog.getByTestId("runtime-handler").innerText(), "Tampermonkey")
+        if (attempt === 0) await dialog.getByRole("button", { name: "Close", exact: true }).click()
+        else await page.keyboard.press("Escape")
+        await dialog.waitFor({ state: "hidden" })
+        await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Show Sidebar")
+        assert.equal(await launcher.count(), 0, "A launcher remains over the mobile composer after closing.")
+      }
+    }
+    return { logoAdjacent44pxTarget: "passed", noFloatingLauncher: "passed", desktopCollapseAndFocus: "passed",
+      nativeSpaNavigation: "passed", mobile320And390px: "passed", nativeDrawerClosesBeforeSync: "passed",
+      mobileFocusReturnsToSidebarOpener: "passed", repeatedOpenCloseNoDuplicate: "passed", scriptEvaluatedByPlaywright: false }
+  } finally {
+    await page.keyboard.press("Escape")
+    await page.setViewportSize(originalSize)
+    try { await ensureNativeSidebar(page) }
+    finally { await page.close() }
+  }
+}
+
 async function main() {
   if (selectedConversation && !transfer) throw new Error("--conversation requires the explicit --transfer opt-in.")
   if (selectedAgentic && !agenticTransfer) throw new Error("--agentic-conversation requires --agentic-transfer.")
@@ -1661,6 +1760,7 @@ async function main() {
     }
     if (install) await installScript(context)
     const result = await smokeTest(context)
+    result.sidebarLauncher = await sidebarLauncherTest(context)
     if (transfer) result.conversationTransfer = await conversationTransferTest(context)
     if (selectedConversation) result.selectedConversation = await selectedConversationTest(context, selectedConversation)
     if (mindTransfer) result.mindHistory = await mindHistoryTransferTest(context)

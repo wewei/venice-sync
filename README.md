@@ -33,8 +33,23 @@ npm run dev
 Open `http://127.0.0.1:5173/` for the local host-page preview. It deliberately
 identifies itself as a preview, not a Tampermonkey E2E result.
 
-The floating launcher opens a non-modal shadcn dialog. Its styles and portal
-stay inside a Shadow DOM so the host page remains usable. Host-page focus changes do not dismiss the dialog; its
+On Venice, a **Sync icon next to the Venice Logo** opens the non-modal shadcn
+dialog. Its 44px click target sits before the native sidebar toggle; there is no
+bottom-right floating launcher over the chat composer. The entry is hidden when
+the desktop sidebar is collapsed or the mobile sidebar is closed. Open the
+sidebar to find it. Native responsive/SPA header replacements reconnect the same
+isolated launcher without moving Venice's Logo or native controls.
+
+On mobile, tapping Sync first closes Venice's modal sidebar and waits for its
+focus/ARIA isolation to end before opening the panel. Closing Sync returns focus
+to the native sidebar opener; desktop focus returns to the Sync icon. A native
+sidebar that cannot close reports an error instead of opening a hidden panel.
+The launcher has its own small Shadow DOM, while the panel's styles and portal
+remain in the independent body Shadow DOM. If the native header is unavailable
+or too narrow, no floating fallback is added. Only the standalone local
+development preview retains the floating launcher.
+
+Host-page focus changes do not dismiss the dialog; its
 close button, Escape, and outside pointer clicks still close it.
 The dialog opens on **Overview**, showing what can be downloaded or uploaded:
 
@@ -430,10 +445,12 @@ On Venice, click **Venice Sync** and confirm:
 1. Overview shows the four content categories and distinguishes available
    JSON, ZIP and Library media transfer entry points.
 2. In **Details**, runtime is **Tampermonkey**, mode is **userscript**, and version
-   is **0.2.0**. Expanding **UI smoke test** and clicking **Test interaction**
+   is **0.2.1**. Expanding **UI smoke test** and clicking **Test interaction**
    changes **Test clicks: 0** to **Test clicks: 1**.
 3. Closing and reopening the dialog works.
-4. Reloading the page mounts one launcher and resets the counter.
+4. Reloading the page mounts one launcher beside the Logo in the expanded
+   sidebar and resets the counter. Collapsing/reopening or switching pages never
+   creates duplicate launchers.
 5. Venice's existing interface and styles remain intact.
 6. Expanded **Details > Storage metadata** shows the current origin's keys, databases and counts;
    **Refresh storage** rereads them. Long lists scroll without hiding the close
@@ -543,6 +560,13 @@ checks refresh,
 checks that hovering and holding the close button does not displace its hit area
 (allowing the standard 1px press feedback), repeats close/reopen three times,
 tests Escape, then reloads its own tab to check reinjection.
+It also verifies the native Logo-adjacent 44px target, desktop collapse/expand,
+keyboard opening/focus restoration and SPA navigation. Dedicated 390px/320px
+checks repeatedly open the native mobile sidebar, tap Sync, verify the Drawer
+and its ARIA isolation are gone before interacting with the panel, then verify
+focus returns to the sidebar opener. There is no body-floating entry remaining
+over the mobile composer. These are desktop Chrome viewport tests, not physical
+phone/browser validation.
 The default test never injects the bundle with Playwright, exports message contents,
 writes storage, or submits prompts. Mind page navigation verifies first-party
 account metadata access. The optional `--transfer` test additionally
@@ -564,6 +588,8 @@ otherwise install manually using the instructions above and retry.
 - `src/main.tsx`: userscript entry.
 - `src/runtime.ts`: actual `GM_info` identity or explicit preview identity.
 - `src/mount.tsx`: idempotent Shadow DOM mount.
+- `src/SidebarLauncher.tsx`: isolated native-header icon and explicit opening errors.
+- `src/sidebar-launcher.ts`: native header lifecycle/space guards and mobile Drawer sequencing.
 - `src/App.tsx`: non-modal panel and retained smoke-test counter.
 - `src/SyncPanel.tsx`: four content pages, transfer overview and lazy Details diagnostics.
 - `src/ConversationTransfer.tsx`: conversation list, download and import preview/confirmation.
