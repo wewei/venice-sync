@@ -579,7 +579,7 @@ On Venice, click **Venice Sync** and confirm:
 1. Overview shows the four content categories and distinguishes available
    JSON, ZIP and Library media transfer entry points.
 2. In **Details**, runtime is **Tampermonkey**, mode is **userscript**, and version
-   is **0.2.1**. Expanding **UI smoke test** and clicking **Test interaction**
+   is **0.3.0**. Expanding **UI smoke test** and clicking **Test interaction**
    changes **Test clicks: 0** to **Test clicks: 1**.
 3. Closing and reopening the dialog works.
 4. Reloading the page mounts one launcher beside the Logo in the expanded
