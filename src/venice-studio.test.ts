@@ -4,7 +4,8 @@ import { loadNativeModule } from "./native-runtime"
 import { currentVeniceOwner, waitForVeniceOwner } from "./venice-classic"
 import { inspectLibraryMedia } from "./library-media"
 import { exportStudioSession, importStudioSession, listStudioSessions } from "./venice-studio"
-import { studioAudioFixture, studioFixture } from "./test/studio-fixture"
+import { observedStudioFixture, studioAudioFixture, studioFixture } from "./test/studio-fixture"
+import { decodeStudioPackage, encodeStudioPackage } from "./studio-session-format"
 import type { LibraryFiles } from "./library-files"
 
 vi.mock("./native-runtime", () => ({ loadNativeModule: vi.fn() }))
@@ -44,6 +45,25 @@ beforeEach(() => {
   }
 })
 describe("native Studio session adapter", () => {
+  it.each(["generate-optionals", "remove-background", "edit-optionals"] as const)("exports, rebuilds and reexports the observed %s case without losing fields or files", async (caseName) => {
+    const pkg = await observedStudioFixture(caseName), sourceId = String(pkg.manifest.session.id)
+    for (const [table, values] of [
+      ["studioImageSessions", [pkg.manifest.session]], ["studioImageTurns", pkg.manifest.turns], ["studioImageTurnMedia", pkg.manifest.media],
+    ] as const) for (const row of values) records[table].set(String(row.id), { ...row, ownerId: "owner" })
+    for (const [path, bytes] of Object.entries(pkg.files)) data.set(path, new Blob([Uint8Array.from(bytes).buffer]))
+    const before = structuredClone(records), original = await exportStudioSession(sourceId, files)
+    const portable = await decodeStudioPackage(await encodeStudioPackage(original))
+    const newId = await importStudioSession(portable, files), output = await exportStudioSession(newId, files)
+    expect(newId).not.toBe(sourceId)
+    expect(output.manifest.turns[0].mode).toBe(pkg.manifest.turns[0].mode)
+    expect(output.manifest.media.map((row) => row.imageSettings)).toEqual(portable.manifest.media.map((row) => row.imageSettings))
+    expect(Object.values(output.files)).toEqual(Object.values(original.files))
+    expect(output.manifest.session.selectedImageId).toBe(output.manifest.media.at(-1)?.id)
+    if (caseName !== "generate-optionals") expect(output.manifest.turns[0].input).toEqual({
+      id: output.manifest.media[0].id, mimeType: output.manifest.media[0].mimeType, fileName: output.manifest.media[0].fileName,
+    })
+    for (const [name, rows] of Object.entries(before)) for (const [id, row] of rows) expect(records[name].get(id)).toEqual(row)
+  })
   it("imports a complete new session and reexports unchanged original bytes and settings", async () => {
     const source = await studioFixture(), id = await importStudioSession(source, files)
     expect((await listStudioSessions()).map((row) => row.id)).toEqual([id])

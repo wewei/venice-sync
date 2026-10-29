@@ -6,7 +6,7 @@ import { VeniceLibraryIcon } from "./components/VeniceIcons"
 import {
   decodeLibraryPackage, encodeLibraryPackage, MAX_LIBRARY_ZIP, rawLibraryPackage, type LibraryPackage,
 } from "./library-format"
-import { exportLibraryAsset, importLibraryAsset, listLibraryAssets, readLibraryAsset, type LibraryAsset } from "./venice-library"
+import { exportLibraryAsset, importLibraryAsset, listLibraryAssets, readLibraryAsset, type LibraryAsset, type LibrarySourceError } from "./venice-library"
 import { BasketAddAll, BasketItem } from "./BatchBasket"
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error)
@@ -53,6 +53,7 @@ function AssetPreview({ asset }: { asset: LibraryAsset }) {
 
 export function LibraryTransfer({ reloadPage }: { reloadPage: () => void }) {
   const [assets, setAssets] = useState<LibraryAsset[]>([])
+  const [sourceErrors, setSourceErrors] = useState<LibrarySourceError[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
@@ -64,12 +65,12 @@ export function LibraryTransfer({ reloadPage }: { reloadPage: () => void }) {
   useEffect(() => {
     let active = true
     listLibraryAssets().then(
-      (data) => { if (active) { setAssets(data); setLoading(false) } },
+      (data) => { if (active) { setAssets(data.assets); setSourceErrors(data.errors); setLoading(false) } },
       (reason: unknown) => { if (active) { setError(errorText(reason)); setLoading(false) } },
     )
     return () => { active = false }
   }, [revision])
-  const refresh = () => { setError(undefined); setLoading(true); setRevision((value) => value + 1) }
+  const refresh = () => { setError(undefined); setSourceErrors([]); setLoading(true); setRevision((value) => value + 1) }
   async function download(asset: LibraryAsset) {
     setBusy(true); setError(undefined); setNotice(undefined)
     try {
@@ -117,10 +118,11 @@ export function LibraryTransfer({ reloadPage }: { reloadPage: () => void }) {
         onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void selectFile(file) }} />
       {loading && <p role="status">Reading Library assets...</p>}
       {error && <p role="alert">{error}</p>}
+      {sourceErrors.map(({ source, message }) => <p role="alert" key={source}>{sources[source]} unavailable: {message}</p>)}
       {!loading && <BasketAddAll items={assets.map(asset => ({ kind: "library", id: asset.key, title: asset.title }))} label="loaded Library assets" disabled={busy} />}
       {!loading && <div data-testid="library-asset-list" className="grid gap-3">
         <p className="text-sm text-muted-foreground">{assets.length} Library assets</p>
-        {!assets.length && !error && <p className="rounded-xl border p-8 text-center text-muted-foreground">No generated Library assets in this account.</p>}
+        {!assets.length && !error && !sourceErrors.length && <p className="rounded-xl border p-8 text-center text-muted-foreground">No generated Library assets in this account.</p>}
         <div className="grid min-w-0 gap-4 lg:grid-cols-2">
           {assets.slice(0, visible).map((asset) => <article key={asset.key} data-library-asset-key={asset.key} className="grid min-w-0 gap-3 rounded-xl border p-3">
             <AssetPreview asset={asset} />

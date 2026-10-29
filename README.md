@@ -243,6 +243,11 @@ chats, Dexie Studio image outputs/audio, generated Mind media, and completed
 Discover generations. This is not a dump of every OPFS file or `userMedia`
 upload; newer Studio project/output stores are not assumed to be equivalent.
 Missing originals and unsupported media are reported per asset, never deleted.
+Sources are read independently: an unavailable native table, unsupported RxDB
+schema or failed internal-account lookup is reported with its source name, while
+other available sources remain usable. A source error is not an empty Library.
+Discover schemas v9/v10 are supported for completed generated-image/video
+originals only; this does not migrate Discover inputs, jobs or templates.
 
 The download contains the unchanged original and available provenance metadata,
 with size and SHA-256 checks (`venice-sync-library-asset` v1). Source metadata
@@ -292,12 +297,18 @@ No generation, inference, publishing or account-preference import is performed.
 
 Only the observed classic Dexie v31 (IndexedDB 310) format is supported.
 Image generation/edit sessions and ordinary audio sessions are supported.
+Image edits include the observed background-removal `mode=remove`, as well as
+`mode=edit`. Observed generation settings such as LoRA strength and watermark
+preferences are retained. Known optional native properties with `undefined`
+values serialize as absent JSON properties; defined values are not discarded.
 Audio source-file attachments, account-bound cloned voices (`vv_*`), custom or
 remote album covers, unknown subtitle shapes, foreign/missing file references,
 incomplete turns without outputs, jobs and unknown native fields are rejected
 explicitly rather than producing a partial archive. Beta RxDB projects/outputs
 and video sessions remain unsupported. Exports verify that records did not change
 during the snapshot; this is not a lock against simultaneous edits/generation.
+Grouped/uploaded input metadata and mask/doodle overlay references remain
+unsupported and fail explicitly, even though a plain single-image edit is portable.
 
 Limits: ZIP and total expanded content 128 MiB, each original 100 MiB, JSON
 metadata 8 MiB, 2048 originals and 10000 turns. Every original is checked by byte

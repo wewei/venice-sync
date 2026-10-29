@@ -35,4 +35,29 @@ export async function studioAudioFixture(): Promise<StudioPackage> {
       files: [{ id, path, mimeType: "audio/mpeg", size: 3, sha256: await sha256(bytes) }] },
     files: { [path]: bytes },
   }
+
+}
+
+export async function observedStudioFixture(caseName: "generate-optionals" | "remove-background" | "edit-optionals"): Promise<StudioPackage> {
+  const pkg = await studioFixture()
+  if (caseName === "generate-optionals") {
+    pkg.manifest.session.type = "generate"
+    delete pkg.manifest.turns[0].input
+    delete pkg.manifest.turns[0].mode
+    delete pkg.files[String(pkg.manifest.media[0].fileName)]
+    pkg.manifest.media = [pkg.manifest.media[1]]
+    pkg.manifest.files = [pkg.manifest.files[1]]
+    const media = pkg.manifest.media[0]
+    media.prompt = undefined
+    media.inputGroupId = undefined
+    media.isUserUploaded = undefined
+    media.source = "image"
+    media.imageSettings = { loraStrength: 75, hideWatermark: false, resolution: undefined, quality: undefined,
+      enableWebSearch: undefined, disablePromptOptimizationThinking: undefined, transparentBackground: undefined, suggestedModel: undefined }
+  } else {
+    pkg.manifest.turns[0].mode = caseName === "remove-background" ? "remove" : "edit"
+    pkg.manifest.media[1].source = caseName === "remove-background" ? "remove-bg" : "edit"
+    pkg.manifest.media[1].imageSettings = { width: 1, height: 1, resolution: undefined, quality: undefined }
+  }
+  return pkg
 }

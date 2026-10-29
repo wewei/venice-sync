@@ -106,7 +106,7 @@ export function validateStudioManifest(value: unknown): StudioManifest {
   const turns = value.turns.map((entry: unknown) => {
     const row = record(entry, ["id", "sessionId", "createdAtUnixTimestamp", "prompt", ...(audio ? ["effectivePrompt", "lyricsPrompt", "settings"] : ["mode", "input"])])
     turnIds.add(unique(row))
-    if (typeof row.prompt !== "string" || (row.mode !== undefined && row.mode !== "edit")) throw new Error("Unsupported Studio turn prompt/mode.")
+    if (typeof row.prompt !== "string" || (row.mode !== undefined && !["edit", "remove"].includes(String(row.mode)))) throw new Error("Unsupported Studio turn prompt/mode.")
     if (audio) {
       audioSettings(row.settings)
       for (const key of ["effectivePrompt", "lyricsPrompt"]) if (row[key] !== undefined && typeof row[key] !== "string") throw new Error("Invalid Studio audio prompt.")
@@ -116,7 +116,7 @@ export function validateStudioManifest(value: unknown): StudioManifest {
   const media = value.media.map((entry: unknown) => {
     const row = record(entry, ["id", "turnId", "sessionId", "createdAtUnixTimestamp", "mimeType", "fileName", "modelId", "modelName", "prompt",
       ...(audio ? ["effectivePrompt", "lyricsPrompt", "coverAssetPath", "audioSettings", "subtitle", "durationSeconds"] :
-        ["imageSettings", "mediaRole", "source", "inputIndex", "enhancedPrompt", "isPromptEnhanced"])])
+        ["imageSettings", "mediaRole", "source", "inputIndex", "inputGroupId", "isUserUploaded", "enhancedPrompt", "isPromptEnhanced"])])
     mediaIds.add(unique(row))
     if (!turnIds.has(String(row.turnId)) || (!audio && !["input", "output"].includes(String(row.mediaRole))) ||
         typeof row.mimeType !== "string" || libraryKind(row.mimeType) !== kind) throw new Error("Foreign or unsupported Studio media.")
@@ -124,11 +124,19 @@ export function validateStudioManifest(value: unknown): StudioManifest {
     for (const key of ["modelId", "modelName", "prompt", "enhancedPrompt", "effectivePrompt", "lyricsPrompt"]) {
       if (row[key] !== undefined && typeof row[key] !== "string") throw new Error(`Invalid Studio ${key}.`)
     }
+    const observedSettingTypes: Record<string, string> = {
+      loraStrength: "number", hideWatermark: "boolean", quality: "string", resolution: "string", enableWebSearch: "boolean",
+      disablePromptOptimizationThinking: "boolean", transparentBackground: "boolean", suggestedModel: "string",
+    }
     if (row.imageSettings !== undefined && (!isRecord(row.imageSettings) ||
         Object.entries(row.imageSettings).some(([key, item]) => ![
           "aspectRatio", "batchCount", "cfgScale", "height", "isCustomSeed", "negativePrompt", "seed", "steps", "stylePreset", "width", "format",
           "isAdultContent", "isAdultModelContentViolation", "isBlurred", "isContentViolation",
-        ].includes(key) || (item !== null && !["string", "number", "boolean"].includes(typeof item))))) throw new Error("Unsupported Studio image settings.")
+          "loraStrength", "hideWatermark", "quality", "resolution", "enableWebSearch",
+          "disablePromptOptimizationThinking", "transparentBackground", "suggestedModel",
+        ].includes(key) || (item !== undefined && item !== null && (!["string", "number", "boolean"].includes(typeof item) ||
+          (key in observedSettingTypes && typeof item !== observedSettingTypes[key])))))) throw new Error("Unsupported Studio image settings.")
+    if (row.inputGroupId !== undefined || row.isUserUploaded !== undefined) throw new Error("Grouped or uploaded Studio inputs are not portable yet.")
     if (row.source !== undefined && !["image", "edit", "remove-bg"].includes(String(row.source))) throw new Error("Unsupported Studio media source.")
     if (row.inputIndex !== undefined && (typeof row.inputIndex !== "number" || !Number.isSafeInteger(row.inputIndex) || row.inputIndex < 0)) throw new Error("Invalid Studio input index.")
     if (row.isPromptEnhanced !== undefined && typeof row.isPromptEnhanced !== "boolean") throw new Error("Invalid Studio prompt flag.")

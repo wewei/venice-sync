@@ -77,7 +77,7 @@ describe("native Library assets", () => {
     expect(records.conversations.size).toBe(1)
     expect(records.messages.size).toBe(1)
     expect(records.messageIds.has(id)).toBe(true)
-    const asset = (await listLibraryAssets()).find((asset) => asset.id === id)
+    const asset = (await listLibraryAssets()).assets.find((asset) => asset.id === id)
     expect(asset?.title).toBe("test.png")
     expect(asset?.kind).toBe("image")
     expect(records.messages.get(id)?.modelName).toBe("Imported Library asset")
@@ -94,12 +94,12 @@ describe("native Library assets", () => {
     })
     records.studioImageTurnMedia.set("output", { id: "output", ownerId: "clerk-owner", sessionId: "studio", mediaRole: "output", mimeType: "image/png" })
     records.studioImageTurnMedia.set("input", { id: "input", ownerId: "clerk-owner", sessionId: "studio", mediaRole: "input", mimeType: "image/png" })
-    expect((await listLibraryAssets()).map((asset) => asset.key).sort()).toEqual(["chat:owned", "studio-image:output"])
+    expect((await listLibraryAssets()).assets.map((asset) => asset.key).sort()).toEqual(["chat:owned", "studio-image:output"])
   })
   it("uses native MIME defaults and isolates unsupported assets without hiding supported rows", async () => {
     records.studioImageTurnMedia.set("default", { id: "default", ownerId: "clerk-owner", sessionId: "studio" })
     records.studioImageTurnMedia.set("unsupported", { id: "unsupported", ownerId: "clerk-owner", sessionId: "studio", mimeType: "image/svg+xml" })
-    const assets = await listLibraryAssets()
+    const { assets } = await listLibraryAssets()
     expect(assets).toHaveLength(2)
     expect(assets.find((asset) => asset.id === "default")?.mimeType).toBe("image/webp")
     const unsupported = assets.find((asset) => asset.id === "unsupported")!
@@ -128,7 +128,7 @@ describe("native Library assets", () => {
         data: { mediaType: "generatedVideo", mimeType: "video/mp4" } }) }] }
     })
     records.studioAudioTurnMedia.set("studio-audio", { id: "studio-audio", ownerId: "clerk-owner", sessionId: "studio-session", mimeType: "audio/wav" })
-    const assets = await listLibraryAssets()
+    const { assets } = await listLibraryAssets()
     expect(assets.map((asset) => asset.path).sort()).toEqual([
       "discover/generations/discover-video.mp4", "media/mind-thread/mind-image.png", "media/studio-session/studio-audio.wav",
     ])
@@ -140,6 +140,60 @@ describe("native Library assets", () => {
     expect(data.size).toBe(0)
     expect(records.conversations.size).toBe(0)
     await expect(listLibraryAssets()).rejects.toThrow("account changed")
+  })
+  it("isolates incompatible Discover from native and Mind sources and refuses exports from that source", async () => {
+    records.studioImageTurnMedia.set("output", { id: "output", ownerId: "clerk-owner", sessionId: "studio", mediaRole: "output", mimeType: "image/png" })
+    const collections = await getNativeCollections({ mindMedia: 6 })
+    collections.mindMedia.find = () => ({ exec: async () => [{ toJSON: () => ({
+      id: "mind", mindConversationId: "thread", data: { mediaType: "generatedImage", mimeType: "image/png" },
+    }) }] })
+    vi.mocked(getNativeCollections).mockImplementation(async (versions) => {
+      if ("discoverGenerations" in versions) throw new Error("Unsupported Discover schema 11")
+      return collections
+    })
+    const result = await listLibraryAssets()
+    expect(result.assets.map((asset) => asset.key).sort()).toEqual(["mind:mind", "studio-image:output"])
+    expect(result.errors).toEqual([{ source: "discover", message: "Unsupported Discover schema 11" }])
+    await expect(exportLibraryAsset("discover:missing", files)).rejects.toThrow("Unsupported Discover schema 11")
+    expect(files.read).not.toHaveBeenCalled()
+  })
+  it("reports internal identity failures without hiding available Dexie sources", async () => {
+    records.studioAudioTurnMedia.set("audio", { id: "audio", ownerId: "clerk-owner", sessionId: "studio", mimeType: "audio/wav" })
+    vi.mocked(currentMindOwner).mockRejectedValue(new Error("Account verification failed"))
+    const result = await listLibraryAssets()
+    expect(result.assets.map((asset) => asset.key)).toEqual(["studio-audio:audio"])
+    expect(result.errors).toEqual([
+      { source: "mind", message: "Account verification failed" }, { source: "discover", message: "Account verification failed" },
+    ])
+  })
+  it("isolates a missing native Studio table from chat, audio and RxDB sources", async () => {
+    const repository = await loadNativeModule(342219)
+    if (typeof repository !== "object" || repository === null || !("db" in repository)) throw new Error("Missing fixture")
+    if (typeof repository.db !== "object" || repository.db === null) throw new Error("Missing fixture database")
+    Reflect.deleteProperty(repository.db, "studioImageTurnMedia")
+    const load = vi.mocked(loadNativeModule).getMockImplementation()!
+    vi.mocked(loadNativeModule).mockImplementation(async (id) => id === 342219 ? repository : load(id))
+    records.conversations.set("owned", { id: "owned", ownerId: "clerk-owner" })
+    records.messages.set("chat", { id: "chat", conversationId: "owned", role: "assistant", modelType: "image" })
+    const result = await listLibraryAssets()
+    expect(result.assets.map((asset) => asset.key)).toEqual(["chat:chat"])
+    expect(result.errors).toEqual([{ source: "studio-image", message: "Native Library table studioImageTurnMedia is unavailable." }])
+    const pkg = await fixture(), id = await importLibraryAsset(pkg, files)
+    expect((await exportLibraryAsset(`chat:${id}`, files)).bytes).toEqual(pkg.bytes)
+  })
+  it("requests only the observed Discover versions and preserves completed-file paths and input provenance", async () => {
+    const collections = await getNativeCollections({ discoverGenerations: 9 })
+    collections.discoverGenerations.schema.version = 10
+    const inputs = [{ id: "reference", kind: "image", mimeType: "image/png", source: "userMedia", slotId: "reference-slot" }]
+    collections.discoverGenerations.find = () => ({ exec: async () => [{ toJSON: () => ({
+      id: "completed", ownerId: "internal-owner", status: "completed", inputs,
+      data: { mediaType: "generatedImage", mimeType: "image/png", modelId: "synthetic", size: 3 },
+    }) }] })
+    const result = await listLibraryAssets()
+    expect(getNativeCollections).toHaveBeenCalledWith({ discoverGenerations: [9, 10] })
+    expect(result.errors).toEqual([])
+    expect(result.assets[0].path).toBe("discover/generations/completed.png")
+    expect(result.assets[0].metadata.inputs).toEqual(inputs)
   })
   it("rolls back native rows and generated files if insertion fails, while preserving originals", async () => {
     records.conversations.set("original", { id: "original", ownerId: "clerk-owner" })

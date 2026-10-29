@@ -194,3 +194,70 @@ venice-sync-studio-session v1 (ZIP)
 
 第一版对音频 `sourceAudio`（账户级附件目录）、账户绑定克隆声音、自定义/远程封面、
 未知字幕形状明确拒绝，不会静默丢弃。新编排器与视频 Session 继续等待专门调查。
+
+## 8. 实际历史兼容修复（2026-10-29）
+
+在原 profile 的专属临时 tab 中，通过原生模块 `342219` 的 Dexie v31
+读取三个已存在的图片会话（共 17 turns、47 media），不解密搬运密钥，
+不调用生成或发布。实际失败原因与修复边界如下：
+
+| 合成回归类别 | 实际原因 | 处理 |
+| --- | --- | --- |
+| generate-optionals | producer 建立了 `inputGroupId/isUserUploaded=undefined` 等属性；原白名单先拒绝字段名 | 识别原生已知未设置属性；有值的分组/上传元信息仍拒绝 |
+| remove-background | 历史编辑 turn 使用 `mode=remove`，原校验仅接受 edit | 保留 remove 模式及 remove-bg 输出；完整带上 input 原件并重建引用 |
+| edit-optionals | `quality/resolution=undefined` 等合法可选设置被原标量校验拒绝 | 接受已知可选的未设置状态，保留所有有值设置 |
+
+生成实例同时确认了 `loraStrength`（number）和 `hideWatermark`（boolean）。
+原生保存函数 `persistImageStudioGeneration` 写入上述元信息，
+`saveConversationMedia` 仍将原件写入同 session 的媒体命名空间。
+对应 loader 从 turn 补充缺省 prompt，不应为了通过校验给媒体伪造 prompt。
+导出应保留原生字段的缺席/未设置状态，而不是补猜测值。
+
+原生还支持把 mask/doodle 移入 OPFS 并写成 `maskMedia/doodleMedia`。
+本次三个实例没有这些引用，也没有有值的 inputGroupId/isUserUploaded；
+它们继续明确拒绝。未知 schema、字段、模式、活动任务、缺失输出、
+外来 selection/input、缺失文件和校验和错误保护保持不变。
+合成回归使用新占位 UUID、提示词和字节，不包含真实用户内容。
+
+真实源端验证使用 Chrome 156.0.8078.48 和 Tampermonkey 自身 installer
+安装本 worktree build，不通过 Playwright 注入 userscript。
+三个实际 ZIP 分别包含 1/5/11 turns、1/14/32 个原件，
+原件总大小分别为 265,488 / 25,495,294 / 60,993,009 bytes。
+导出的每个有值逻辑字段与原生解密行一致，47 个原件逐文件 SHA-256 匹配。
+Library 列表首屏 24 项且无来源错误，实际单资产原件导出匹配。
+源端 11 张相关 Dexie 表、6 个 RxDB collection 及 media/minds/discover
+共 56 个原件的前后指纹完全一致；Studio 三张逻辑表还匹配先前迁移记录的基线指纹。
+此处的源端导出验证不等于目标浏览器已完成导入或原生编辑器恢复。
+后续同 profile 的验收曾因调试连接权限中断；该轮源端新增测试副本的
+识别/清理独立跟踪，恢复访问后的验证见下文，不能用目标浏览器清理成功替代源端清理结论。
+
+随后在 Chrome for Testing 156.0.8078.73 的独占窗口，通过 Tampermonkey
+自身 installer 安装同一个 build，使用上述已校验的三个源 ZIP 完成了实际
+新副本导入和再导出（此阶段不连接源浏览器）：
+
+- 17 turns、47 个原件合计 86,753,791 bytes 全部通过；其中一个源 ZIP
+  大小为 61,044,702 bytes，使用 Chrome 原生本地文件选择，不受 Playwright
+  buffer 上传路径的 50 MiB 限制，不是缩小样本或注入 bundle。
+- 67 个新 session/turn/media UUID 全局唯一，且与全部源 UUID 不相交；
+  所有已定义逻辑字段、session/turn 外键、selectedImageId、
+  编辑 input 的 ID/路径及每个原件的字节数/SHA-256 与源包逐一匹配。
+  仅导入时的 session 更新时间按既有行为更新。
+- 另一个实际 Library 单资产（265,488 bytes）完成新容器导入、再导出，
+  原字节和全部 provenance 保持一致。
+- 每次写入前保存原 ID 集合，写入后立即以原生只读索引记录新 ID journal，
+  再读取原生解密行；清理前重验同一逻辑行快照 hash、归属和引用。
+  所有本轮目标端副本按这些新 ID 定向清理，11 张相关 Dexie 表、
+  6 个 RxDB collection 及 media/minds/discover 原文件的指纹复原，
+  目标原有五项迁移内容保留。临时 tab 和辅助服务已关闭。
+
+以上是真实源导出包到另一浏览器的导入/再导出验证，不是原生编辑器生成测试。
+没有生成、推理或发布。
+
+旧 Chrome 恢复合法调试访问后，另行仅连接源端，严格识别之前留下的一个测试副本：
+先排除原有三个 session ID，确认仅有一个新增会话，再逐一核对当前归属、
+所有有值逻辑字段、新 UUID、selection/外键、文件路径及原件字节数/SHA-256，
+均与第一个源 ZIP 的新 ID 重建结果一致。随后仅删除这个新 session/turn/media
+及其媒体命名空间和缩略图。清理后源端 Studio 恢复为 3 sessions / 17 turns /
+47 media，11 张相关 Dexie 表、6 个 RxDB collection 和 56 个原件的完整指纹
+与最初源导出前基线完全一致。此轮未访问 Testing，也没有启动辅助服务；
+新建只读调查 tab 已关闭，之前的源端残留已确认清理。
