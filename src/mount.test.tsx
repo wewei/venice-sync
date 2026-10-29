@@ -54,6 +54,8 @@ describe("isolated UI", () => {
     await user.click(ui.getByRole("button", { name: "Venice Sync" }))
     const dialog = ui.getByRole("dialog", { name: "Venice Sync" })
     expect(dialog.getRootNode()).toBe(host.shadowRoot)
+    expect(ui.getByTestId("sync-backdrop").getRootNode()).toBe(host.shadowRoot)
+    expect(document.querySelector('[data-testid="sync-backdrop"]')).toBeNull()
     expect(document.querySelector('[role="dialog"]')).toBeNull()
     expect(ui.getByRole("heading", { name: "Download & upload" })).toBeVisible()
     expect(ui.queryByTestId("runtime-handler")).toBeNull()
@@ -62,7 +64,7 @@ describe("isolated UI", () => {
     await user.click(ui.getByText("UI smoke test", { exact: true }))
     await user.click(ui.getByRole("button", { name: "Test interaction" }))
     expect(ui.getByRole("status")).toHaveTextContent("Test clicks: 1")
-    await user.click(ui.getByRole("button", { name: "Close" }))
+    await user.click(ui.getByTestId("sync-backdrop"))
     expect(ui.queryByRole("dialog")).toBeNull()
   })
 

@@ -6,6 +6,7 @@ import {
   DialogContent,
   DialogDescription,
   DialogHeader,
+  DialogPortal,
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
@@ -38,10 +39,14 @@ export function App({ runtime, portalContainer }: AppProps) {
           Venice Sync
         </Button>
       </DialogTrigger> : <SidebarLauncher buttonRef={launcher} expanded={open} onOpen={(element) => { returnFocus.current = element; setOpen(true) }} onClose={() => { if (!importing) setOpen(false) }} />}
+      {open && <DialogPortal container={portalContainer}>
+        <div data-testid="sync-backdrop" aria-hidden="true" className="pointer-events-auto fixed inset-0 z-50 bg-black/15" />
+      </DialogPortal>}
       <DialogContent
         portalContainer={portalContainer}
-        showCloseButton={!importing}
-        className="pointer-events-auto flex h-[min(54rem,calc(100dvh-2rem))] max-h-[calc(100dvh-2rem)] flex-col gap-6 overflow-hidden p-5 [&>[data-slot=dialog-close]]:size-11 sm:max-w-[min(72rem,calc(100vw-4rem))] sm:p-7"
+        showCloseButton={false}
+        aria-busy={importing}
+        className="pointer-events-auto flex h-[min(54rem,calc(100dvh-2rem))] max-h-[calc(100dvh-2rem)] flex-col gap-6 overflow-hidden p-5 sm:max-w-[min(72rem,calc(100vw-4rem))] sm:p-7"
         onFocusOutside={(event) => event.preventDefault()}
         onPointerDownOutside={(event) => {
           if (importing || (launcher.current && event.detail.originalEvent.composedPath().includes(launcher.current))) event.preventDefault()

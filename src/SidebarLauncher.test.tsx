@@ -25,7 +25,7 @@ describe("isolated sidebar launcher", () => {
     expect(button).toHaveAttribute("title", "Venice Sync")
     await user.click(button)
     expect(await ui.findByRole("dialog", { name: "Venice Sync" })).toBeVisible()
-    await user.click(ui.getByRole("button", { name: "Close" }))
+    await user.click(ui.getByTestId("sync-backdrop"))
     await waitFor(() => expect(button.getRootNode()).toHaveProperty("activeElement", button))
   })
   it("closes the native Drawer before opening and returns focus to Show Sidebar", async () => {
@@ -39,7 +39,7 @@ describe("isolated sidebar launcher", () => {
     await userEvent.click(launcher.getByRole("button", { name: "Venice Sync" }))
     expect(await ui.findByRole("dialog", { name: "Venice Sync" })).toBeVisible()
     expect(drawer.isConnected).toBe(false)
-    await userEvent.click(ui.getByRole("button", { name: "Close" }))
+    await userEvent.click(ui.getByTestId("sync-backdrop"))
     await waitFor(() => expect(document.activeElement).toBe(opener))
   })
   it("preserves trigger toggling and announces the expanded state", async () => {

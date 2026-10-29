@@ -168,8 +168,12 @@ remain in the independent body Shadow DOM. If the native header is unavailable
 or too narrow, no floating fallback is added. Only the standalone local
 development preview retains the floating launcher.
 
-Host-page focus changes do not dismiss the dialog; its
-close button, Escape, and outside pointer clicks still close it.
+Host-page focus changes do not dismiss the dialog. A light, 15% black backdrop
+without blur covers the page outside Sync; click it or press Escape to close.
+There is no top-right close button: that space belongs to the basket icon.
+The basket's own backdrop stays inside Sync, and Escape first returns from the
+basket to the content page. During batch writes, neither Escape nor the outer
+backdrop can close Sync or discard results.
 The dialog opens on **Overview**, showing what can be downloaded or uploaded:
 
 | Content page | Download | Upload |
@@ -710,8 +714,7 @@ opens Details to check the real manager identity and diagnostic button. It verif
 Shadow DOM portal placement and rendered styles,
 compares displayed storage summaries against the page's actual storage metadata,
 checks refresh,
-checks that hovering and holding the close button does not displace its hit area
-(allowing the standard 1px press feedback), repeats close/reopen three times,
+checks the Shadow DOM backdrop and outside dismissal, repeats close/reopen three times,
 tests Escape, then reloads its own tab to check reinjection.
 It also verifies the native Logo-adjacent 44px target, desktop collapse/expand,
 keyboard opening/focus restoration and SPA navigation. Dedicated 390px/320px

@@ -102,34 +102,16 @@ async function installScript(context) {
   console.log("Approved installation in Tampermonkey's own installer UI.")
 }
 
-async function closeWithPointerCheck(page, dialog) {
-  const close = dialog.getByRole("button", { name: "Close", exact: true })
+async function closeFromBackdrop(page, dialog) {
   await dialog.evaluate(async (element) => {
     await Promise.all(element.getAnimations().map((animation) => animation.finished))
   })
-  const before = await close.boundingBox()
-  assert.ok(before, "Close button has no layout box.")
-  await page.mouse.move(before.x + before.width - 2, before.y + before.height / 2)
-  await page.waitForTimeout(200)
-  const assertStable = async (phase) => {
-    const box = await close.boundingBox()
-    assert.ok(box, `Close button disappeared during ${phase}.`)
-    for (const key of ["x", "y", "width", "height"]) {
-      assert.ok(
-        Math.abs(box[key] - before[key]) <= 1,
-        `Close button ${key} moved during ${phase}: ${before[key]} -> ${box[key]}`,
-      )
-    }
-  }
-  await assertStable("hover")
-  await page.mouse.down()
-  try {
-    await page.waitForTimeout(200)
-    await assertStable("pointer press")
-  } finally {
-    await page.mouse.up()
-  }
+  assert.equal(await dialog.getByRole("button", { name: "Close", exact: true }).count(), 0)
+  const backdrop = page.locator(`#${hostId}`).getByTestId("sync-backdrop")
+  assert.notEqual(await backdrop.evaluate(element => getComputedStyle(element).backgroundColor), "rgba(0, 0, 0, 0)")
+  await backdrop.click({ position: { x: 1, y: 1 } })
   await dialog.waitFor({ state: "hidden" })
+  await backdrop.waitFor({ state: "hidden" })
 }
 
 async function navigatePanel(dialog, name) {
@@ -393,7 +375,7 @@ async function smokeTest(context) {
   await mkdir(results, { recursive: true })
   await dialog.screenshot({ path: path.join(results, "tampermonkey-details.png") })
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    await closeWithPointerCheck(page, dialog)
+    await closeFromBackdrop(page, dialog)
     await openSync(page)
     await openUiDiagnostics(dialog)
     await status.filter({ hasText: "Test clicks: 1" }).waitFor()
@@ -418,7 +400,7 @@ async function smokeTest(context) {
     storageOverview: "passed",
     storageRefresh: "passed",
     storage,
-    closeButtonPointerStability: "passed",
+    outsideBackdropDismissal: "passed",
     focusOutsideDismissalPrevented: true,
     closeAndReopen: "passed",
     escapeKey: "passed",
@@ -1911,12 +1893,12 @@ async function batchImportControlsTest(context) {
     preserveFixturePage = true; writeRequested = true
     await imports.getByRole("button", { name: "Confirm selected batch import", exact: true }).click()
     await imports.getByRole("button", { name: "Stop after current item", exact: true }).waitFor({ state: "visible", timeout: 5000 })
-    assert.equal(await dialog.getByRole("button", { name: "Close", exact: true }).count(), 0)
+    assert.equal(await dialog.getAttribute("aria-busy"), "true")
     await page.keyboard.press("Escape")
     assert.equal(await dialog.getByRole("dialog", { name: "Content basket", exact: true }).count(), 0)
     await page.keyboard.press("Escape"); await page.mouse.click(1, 1)
     assert.equal(await dialog.isVisible(), true, "A running import was dismissed.")
-    assert.equal(await dialog.getByRole("button", { name: "Close", exact: true }).count(), 0)
+    assert.equal(await dialog.getAttribute("aria-busy"), "true")
     await dialog.getByRole("button", { name: "Export basket (0)", exact: true }).click()
     await imports.getByRole("button", { name: "Stop after current item", exact: true }).click()
     await page.waitForFunction(id => ![...document.getElementById(id).shadowRoot.querySelectorAll("button")]
@@ -1930,7 +1912,7 @@ async function batchImportControlsTest(context) {
     assert.equal(committed.size, results.length)
     assert.equal(await imports.locator('input[type="checkbox"]:disabled').count(), results.length)
     assert.equal(await page.evaluate(() => performance.timeOrigin), originBefore)
-    assert.equal(await dialog.getByRole("button", { name: "Close", exact: true }).count(), 1)
+    assert.equal(await dialog.getAttribute("aria-busy"), "false")
     await dialog.getByRole("button", { name: "Back to content", exact: true }).click()
     await dialog.getByRole("button", { name: "Export basket (0)", exact: true }).click()
     assert.equal(await imports.locator("[data-batch-result-key]").count(), results.length)
@@ -2024,7 +2006,7 @@ async function sidebarLauncherTest(context) {
         assert.ok(bounds && bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= width + 1 && bounds.y + bounds.height <= 845)
         await dialog.getByRole("button", { name: "Details", exact: true }).click()
         assert.equal(await dialog.getByTestId("runtime-handler").innerText(), "Tampermonkey")
-        if (attempt === 0) await dialog.getByRole("button", { name: "Close", exact: true }).click()
+        if (attempt === 0) await closeFromBackdrop(page, dialog)
         else await page.keyboard.press("Escape")
         await dialog.waitFor({ state: "hidden" })
         await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Show Sidebar")

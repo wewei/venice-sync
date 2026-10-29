@@ -123,7 +123,7 @@ export function BatchBasket({ children, header, reloadPage, onImportingChange }:
   return <BatchContext.Provider value={{ items, busy, add, remove }}>
     <div ref={shell} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       <div inert={expanded} className="flex min-h-0 min-w-0 flex-1 flex-col gap-5">
-        <div className="flex shrink-0 items-start justify-between gap-2 pr-9">
+        <div className="flex shrink-0 items-start justify-between gap-2">
           <div className="min-w-0">{header ?? <h2 className="font-medium">Venice Sync</h2>}</div>
           <IconAction ref={trigger} label={`Export basket (${items.length})`} aria-haspopup="dialog" aria-controls={drawerId} aria-expanded={expanded}
             className="relative size-11 shrink-0" onClick={() => setExpanded(true)}>
