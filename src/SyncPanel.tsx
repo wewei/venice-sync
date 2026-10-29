@@ -38,6 +38,8 @@ interface SyncPanelProps {
   reloadPage: () => void
   onImportingChange?: (busy: boolean) => void
   header?: ReactNode
+  visible?: boolean
+  navigation?: ReactNode
 }
 
 function TransferDirections({ ready, mind = false, characters = false, library = false }: { ready: boolean; mind?: boolean; characters?: boolean; library?: boolean }) {
@@ -87,7 +89,7 @@ function DetailsPage({ runtime, clicks, onTestInteraction }: Omit<SyncPanelProps
   )
 }
 
-export function SyncPanel({ runtime, clicks, onTestInteraction, reloadPage, onImportingChange, header }: SyncPanelProps) {
+export function SyncPanel({ runtime, clicks, onTestInteraction, reloadPage, onImportingChange, header, navigation: navigationControl, visible = true }: SyncPanelProps) {
   const [page, setPage] = useState<Page>("overview")
   const [conversationsOpened, setConversationsOpened] = useState(false)
   const [mindOpened, setMindOpened] = useState(false)
@@ -113,8 +115,8 @@ export function SyncPanel({ runtime, clicks, onTestInteraction, reloadPage, onIm
   ] as const
 
   return (
-    <BatchBasket header={header} reloadPage={reloadPage} onImportingChange={onImportingChange}><div data-testid="sync-panel" className="flex min-h-0 min-w-0 flex-1 flex-col gap-6 sm:flex-row">
-      <nav ref={navigation} aria-label="Sync pages" className="grid shrink-0 grid-cols-2 gap-1 border-b pb-3 sm:flex sm:w-48 sm:flex-col sm:border-r sm:border-b-0 sm:pr-4 sm:pb-0">
+    <BatchBasket header={header} navigation={navigationControl} visible={visible} reloadPage={reloadPage} onImportingChange={onImportingChange}><div data-testid="sync-panel" className="flex min-h-0 min-w-0 flex-1 flex-col gap-6 @min-[48rem]/sync:flex-row">
+      <nav ref={navigation} aria-label="Sync pages" className="grid shrink-0 grid-cols-2 gap-1 border-b pb-3 @min-[48rem]/sync:flex @min-[48rem]/sync:w-48 @min-[48rem]/sync:flex-col @min-[48rem]/sync:border-r @min-[48rem]/sync:border-b-0 @min-[48rem]/sync:pr-4 @min-[48rem]/sync:pb-0">
         {links.map(({ id, title, Icon }) => (
           <Button key={id} variant={page === id ? "secondary" : "ghost"} className="h-11 min-w-0 justify-start gap-3 sm:h-10" aria-current={page === id ? "page" : undefined} onClick={() => navigate(id)}>
             <Icon aria-hidden="true" /><span className="truncate">{title}</span>
@@ -128,7 +130,7 @@ export function SyncPanel({ runtime, clicks, onTestInteraction, reloadPage, onIm
               <h2 className="text-xl font-medium">Download &amp; upload</h2>
               <p className="text-sm text-muted-foreground">Four kinds of local content. Upload means importing a file into this browser, not sending it to a cloud service.</p>
             </div>
-            <div className="grid gap-5 md:grid-cols-2">
+            <div className="grid gap-5 @min-[48rem]/sync:grid-cols-2">
               {contentPages.map(({ id, title, Icon, description, note, ready }) => (
                 <section key={id} aria-label={`${title} transfer options`} className="flex min-w-0 flex-col gap-4 rounded-xl border p-5">
                   <div className="flex items-start gap-2">

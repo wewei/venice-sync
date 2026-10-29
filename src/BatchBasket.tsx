@@ -32,8 +32,8 @@ export function BasketAddAll({ items, label, disabled = false }: { items: BatchS
   </Button>
 }
 
-export function BatchBasket({ children, header, reloadPage, onImportingChange }: {
-  children: ReactNode; header?: ReactNode; reloadPage?: () => void; onImportingChange?: (busy: boolean) => void
+export function BatchBasket({ children, header, navigation, reloadPage, onImportingChange, visible = true }: {
+  children: ReactNode; header?: ReactNode; navigation?: ReactNode; reloadPage?: () => void; onImportingChange?: (busy: boolean) => void; visible?: boolean
 }) {
   const [items, setItems] = useState<BatchSelection[]>([])
   const [busy, setBusy] = useState(false), [expanded, setExpanded] = useState(false)
@@ -44,7 +44,6 @@ export function BatchBasket({ children, header, reloadPage, onImportingChange }:
   const [progress, setProgress] = useState(0), [archive, setArchive] = useState<BatchPackage>()
   const controller = useRef<AbortController | undefined>(undefined), active = useRef(true)
   const fileInput = useRef<HTMLInputElement>(null)
-  const shell = useRef<HTMLDivElement>(null), drawer = useRef<HTMLElement>(null)
   const trigger = useRef<HTMLButtonElement>(null), back = useRef<HTMLButtonElement>(null)
   const drawerId = useId(), titleId = useId()
   useEffect(() => {
@@ -52,34 +51,14 @@ export function BatchBasket({ children, header, reloadPage, onImportingChange }:
     return () => onImportingChange?.(false)
   }, [importing, onImportingChange])
   useEffect(() => {
-    if (!expanded) return
+    if (!expanded || !visible) return
     back.current?.focus()
-    const element = shell.current
     const returnTarget = trigger.current
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault(); event.stopPropagation(); setExpanded(false)
-      } else if (event.key === "Tab") {
-        const buttons = [...(drawer.current?.querySelectorAll<HTMLElement>('button, input, select, textarea, summary, a[href], [tabindex]') ?? [])]
-          .filter(node => node.tabIndex >= 0 && !node.matches(":disabled") && !node.closest("[hidden], [inert]"))
-          .filter(node => !node.closest("details:not([open])") || node.matches("summary"))
-        const current = buttons.findIndex(node => event.composedPath().includes(node))
-        const next = event.shiftKey ? (current <= 0 ? buttons.length - 1 : current - 1) : (current + 1) % buttons.length
-        event.preventDefault()
-        buttons[next]?.focus()
-      }
-    }
-    const onFocusIn = (event: FocusEvent) => {
-      if (drawer.current && !event.composedPath().includes(drawer.current)) back.current?.focus({ preventScroll: true })
-    }
-    element?.ownerDocument.addEventListener("keydown", onKeyDown, true)
-    element?.ownerDocument.addEventListener("focusin", onFocusIn, true)
     return () => {
-      element?.ownerDocument.removeEventListener("keydown", onKeyDown, true)
-      element?.ownerDocument.removeEventListener("focusin", onFocusIn, true)
-      if (returnTarget?.isConnected) returnTarget.focus({ preventScroll: true })
+      if (returnTarget?.isConnected && !returnTarget.closest("[hidden]")) returnTarget.focus({ preventScroll: true })
     }
-  }, [expanded])
+  }, [expanded, visible])
+  useEffect(() => { if (!visible) controller.current?.abort() }, [visible])
   useEffect(() => {
     active.current = true
     return () => { active.current = false; controller.current?.abort() }
@@ -121,11 +100,11 @@ export function BatchBasket({ children, header, reloadPage, onImportingChange }:
     finally { if (active.current) setBusy(false) }
   }
   return <BatchContext.Provider value={{ items, busy, add, remove }}>
-    <div ref={shell} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-      <div inert={expanded} className="flex min-h-0 min-w-0 flex-1 flex-col gap-5">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div hidden={expanded} className="flex min-h-0 min-w-0 flex-1 flex-col gap-5">
         <div className="flex shrink-0 items-start justify-between gap-2">
           <div className="min-w-0">{header ?? <h2 className="font-medium">Venice Sync</h2>}</div>
-          <IconAction ref={trigger} label={`Export basket (${items.length})`} aria-haspopup="dialog" aria-controls={drawerId} aria-expanded={expanded}
+          <IconAction ref={trigger} label={`Export basket (${items.length})`} aria-controls={drawerId} aria-expanded={expanded}
             className="relative size-11 shrink-0" onClick={() => setExpanded(true)}>
             <IconBasket aria-hidden="true" />
             <span aria-hidden="true" className="absolute top-0 right-0 min-w-5 rounded-full bg-secondary px-1 text-[0.65rem] font-medium">{items.length}</span>
@@ -134,13 +113,13 @@ export function BatchBasket({ children, header, reloadPage, onImportingChange }:
         {busy && <p role="status" className="sr-only">{importing ? "Batch import running. Open the basket to review progress." : "Batch operation running. Open the basket to review progress."}</p>}
         <fieldset disabled={busy} className="flex min-h-0 min-w-0 flex-1 border-0 p-0">{children}</fieldset>
       </div>
-      <div hidden={!expanded} className="absolute inset-0 z-10 overflow-hidden rounded-lg" data-testid="batch-basket-overlay">
-        <div aria-hidden="true" className="absolute inset-0 bg-black/10" onClick={() => setExpanded(false)} />
-        <section ref={drawer} id={drawerId} role="dialog" aria-modal="true" aria-labelledby={titleId}
-          className="absolute inset-y-0 right-0 flex w-full min-w-0 flex-col border-l bg-popover text-sm shadow-lg [&_button]:min-h-11 [&_button]:whitespace-normal [&_button[data-size=icon]]:min-w-11 sm:max-w-md">
+        <section hidden={!expanded} id={drawerId} role="region" aria-labelledby={titleId} data-testid="batch-basket-page"
+          onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setExpanded(false) } }}
+          className="flex min-h-0 min-w-0 flex-1 flex-col [&_button]:min-h-11 [&_button]:whitespace-normal [&_button[data-size=icon]]:min-w-11">
           <div className="flex shrink-0 items-center gap-2 border-b p-2">
             <IconAction ref={back} label="Back to content" className="size-11 shrink-0" onClick={() => setExpanded(false)}><IconArrowLeft aria-hidden="true" /></IconAction>
-            <h2 id={titleId} className="font-medium">Content basket</h2>
+            {navigation}
+            <h1 id={titleId} className="text-lg font-medium">Content basket</h1>
             {importing && <span role="status" className="ml-auto text-xs">Import running</span>}
           </div>
           <div role="group" aria-label="Basket views" className="grid shrink-0 grid-cols-2 gap-1 border-b p-2">
@@ -156,7 +135,7 @@ export function BatchBasket({ children, header, reloadPage, onImportingChange }:
                 {busy && exporting && <Button size="sm" variant="outline" onClick={() => controller.current?.abort()}>Cancel batch export</Button>}
                 {exporting && <span role="status">{`Preparing ${progress}/${items.length} items...`}</span>}
               </div>
-              <p className="text-xs text-muted-foreground">Add items from any content page. Minds include all saved package content; selecting chats does not automatically include their Mind definitions. Export is a sequence of reads, not an atomic account snapshot. Limits: 200 items, 4096 files, 128 MiB logical/expanded/ZIP. Closing Sync discards the basket; Back keeps your page and selections.</p>
+              <p className="text-xs text-muted-foreground">Add items from any content page. Minds include all saved package content; selecting chats does not automatically include their Mind definitions. Export is a sequence of reads, not an atomic account snapshot. Limits: 200 items, 4096 files, 128 MiB logical/expanded/ZIP. Returning to Venice keeps selections and results; it cancels any pending export download. Reloading discards this workspace.</p>
               {!items.length && <p className="text-muted-foreground">Your export basket is empty. Add items from the content pages.</p>}
               {!!items.length && <Button size="sm" variant="ghost" className="w-fit" disabled={busy} onClick={() => setItems([])}>Clear export basket</Button>}
               {items.map(item => <div key={batchKey(item)} className="flex min-w-0 items-center gap-2" data-basket-item={batchKey(item)}>
@@ -188,7 +167,6 @@ export function BatchBasket({ children, header, reloadPage, onImportingChange }:
             </section>
           </div>
         </section>
-      </div>
     </div>
   </BatchContext.Provider>
 }

@@ -4,17 +4,19 @@ import { afterEach, describe, expect, it } from "vitest"
 import { mountApp, HOST_ID } from "./mount"
 import { LAUNCHER_ID } from "./sidebar-launcher"
 import { sidebarFixture } from "./test/sidebar-fixture"
+import { nativePageFixture } from "./test/native-page-fixture"
 
 let mounted: ReturnType<typeof mountApp> | undefined
 afterEach(() => {
   act(() => { if (mounted?.status === "mounted") mounted.unmount() })
   mounted = undefined; document.body.replaceChildren()
 })
-function setup() {
+function setup(mobile = false) {
+  const nativePage = nativePageFixture({ sidebar: mobile ? undefined : document.querySelector<HTMLElement>("aside") ?? undefined, mobile })
   act(() => { mounted = mountApp({ mode: "userscript", handler: "Tampermonkey", version: "test" }, "") })
   const body = document.getElementById(HOST_ID)!.shadowRoot!.querySelector<HTMLElement>("[data-venice-sync-app]")!
   const launcher = document.getElementById(LAUNCHER_ID)!
-  return { ui: within(body), launcher: within(launcher.shadowRoot!.querySelector<HTMLElement>("[data-venice-sync-launcher]")!) }
+  return { ui: within(body), launcher: within(launcher.shadowRoot!.querySelector<HTMLElement>("[data-venice-sync-launcher]")!), nativePage }
 }
 describe("isolated sidebar launcher", () => {
   it("opens the existing panel from a separate Shadow root and restores desktop focus", async () => {
@@ -24,23 +26,22 @@ describe("isolated sidebar launcher", () => {
     const button = launcher.getByRole("button", { name: "Venice Sync" })
     expect(button).toHaveAttribute("title", "Venice Sync")
     await user.click(button)
-    expect(await ui.findByRole("dialog", { name: "Venice Sync" })).toBeVisible()
-    await user.click(ui.getByTestId("sync-backdrop"))
+    expect(await ui.findByRole("region", { name: "Venice Sync" })).toBeVisible()
+    await user.click(ui.getByRole("button", { name: "Back to Venice" }))
     await waitFor(() => expect(button.getRootNode()).toHaveProperty("activeElement", button))
   })
   it("closes the native Drawer before opening and returns focus to Show Sidebar", async () => {
     const drawer = document.createElement("section")
     drawer.setAttribute("role", "dialog"); drawer.setAttribute("aria-modal", "true"); document.body.append(drawer)
-    const native = sidebarFixture(drawer), opener = document.createElement("button")
-    opener.setAttribute("aria-label", "Show Sidebar"); document.body.append(opener)
-    const { ui, launcher } = setup(), body = document.getElementById(HOST_ID)!
+    const native = sidebarFixture(drawer)
+    const { ui, launcher, nativePage } = setup(true), body = document.getElementById(HOST_ID)!
     body.setAttribute("aria-hidden", "true")
     native.toggle.addEventListener("click", () => { drawer.remove(); body.removeAttribute("aria-hidden") })
     await userEvent.click(launcher.getByRole("button", { name: "Venice Sync" }))
-    expect(await ui.findByRole("dialog", { name: "Venice Sync" })).toBeVisible()
+    expect(await ui.findByRole("region", { name: "Venice Sync" })).toBeVisible()
     expect(drawer.isConnected).toBe(false)
-    await userEvent.click(ui.getByTestId("sync-backdrop"))
-    await waitFor(() => expect(document.activeElement).toBe(opener))
+    await userEvent.click(ui.getByRole("button", { name: "Back to Venice" }))
+    await waitFor(() => expect(document.activeElement).toBe(nativePage.opener))
   })
   it("preserves trigger toggling and announces the expanded state", async () => {
     sidebarFixture()
@@ -48,10 +49,10 @@ describe("isolated sidebar launcher", () => {
     const button = launcher.getByRole("button", { name: "Venice Sync" })
     expect(button).toHaveAttribute("aria-expanded", "false")
     await user.click(button)
-    expect(await ui.findByRole("dialog", { name: "Venice Sync" })).toBeVisible()
+    expect(await ui.findByRole("region", { name: "Venice Sync" })).toBeVisible()
     expect(button).toHaveAttribute("aria-expanded", "true")
     await user.click(button)
-    await waitFor(() => expect(ui.queryByRole("dialog", { name: "Venice Sync" })).toBeNull())
+    await waitFor(() => expect(ui.queryByRole("region", { name: "Venice Sync" })).toBeNull())
     expect(button).toHaveAttribute("aria-expanded", "false")
   })
 })

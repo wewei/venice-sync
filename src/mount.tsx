@@ -23,13 +23,12 @@ export function mountApp(runtime: RuntimeInfo, css: string) {
   container.className = "venice-sync-root"
   container.dataset.veniceSyncApp = ""
   const reactContainer = document.createElement("div")
-  const portalContainer = document.createElement("div")
-  container.append(reactContainer, portalContainer)
+  container.append(reactContainer)
   shadow.append(style, container)
   document.body.append(host)
 
   const root = createRoot(reactContainer)
-  root.render(<App runtime={runtime} portalContainer={portalContainer} />)
+  root.render(<App runtime={runtime} host={host} />)
 
   return {
     status: "mounted" as const,

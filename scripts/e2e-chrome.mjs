@@ -11,7 +11,7 @@ import packageJson from "../package.json" with { type: "json" }
 const root = fileURLToPath(new URL("../", import.meta.url))
 const extensionOrigin =
   `chrome-extension://${process.env.TM_EXTENSION_ID || "dhdgffkkebhmkfjojejmpbldmpobfkfo"}`
-const scriptUrl = "http://127.0.0.1:4173/venice-sync.user.js"
+const scriptUrl = process.env.USERSCRIPT_URL || "http://127.0.0.1:4173/venice-sync.user.js"
 const hostId = "venice-sync-userscript-host"
 const launcherId = "venice-sync-sidebar-launcher"
 const install = process.argv.includes("--install")
@@ -22,7 +22,8 @@ const charactersTransfer = process.argv.includes("--characters")
 const libraryTransfer = process.argv.includes("--library")
 const studioTransfer = process.argv.includes("--studio-sessions")
 const batchControls = process.argv.includes("--batch-controls")
-const batchOnly = process.argv.includes("--batch-only") || batchControls
+const nativePage = process.argv.includes("--native-page")
+const batchOnly = process.argv.includes("--batch-only") || batchControls || nativePage
 const batchTransfer = process.argv.includes("--batch") || process.argv.includes("--batch-only")
 let preserveFixturePage = false
 const mindPackage = process.argv.includes("--mind-package")
@@ -102,16 +103,11 @@ async function installScript(context) {
   console.log("Approved installation in Tampermonkey's own installer UI.")
 }
 
-async function closeFromBackdrop(page, dialog) {
-  await dialog.evaluate(async (element) => {
-    await Promise.all(element.getAnimations().map((animation) => animation.finished))
-  })
+async function returnToVenice(page, dialog) {
   assert.equal(await dialog.getByRole("button", { name: "Close", exact: true }).count(), 0)
-  const backdrop = page.locator(`#${hostId}`).getByTestId("sync-backdrop")
-  assert.notEqual(await backdrop.evaluate(element => getComputedStyle(element).backgroundColor), "rgba(0, 0, 0, 0)")
-  await backdrop.click({ position: { x: 1, y: 1 } })
+  assert.equal(await page.locator(`#${hostId}`).getByTestId("sync-backdrop").count(), 0)
+  await dialog.getByRole("button", { name: "Back to Venice", exact: true }).click()
   await dialog.waitFor({ state: "hidden" })
-  await backdrop.waitFor({ state: "hidden" })
 }
 
 async function navigatePanel(dialog, name) {
@@ -167,7 +163,7 @@ async function sidebarLauncher(page) {
 
 async function openSync(page) {
   await (await sidebarLauncher(page)).click()
-  await page.locator(`#${hostId}`).getByRole("dialog", { name: "Venice Sync", exact: true }).waitFor({ state: "visible" })
+  await page.locator(`#${hostId}`).getByRole("region", { name: "Venice Sync", exact: true }).waitFor({ state: "visible" })
 }
 
 async function openUiDiagnostics(dialog) {
@@ -337,7 +333,7 @@ async function smokeTest(context) {
   assert.equal(await host.count(), 1)
   await openSync(page)
 
-  const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
+  const dialog = host.getByRole("region", { name: "Venice Sync", exact: true })
   await dialog.waitFor({ state: "visible" })
   const webui = await checkPanelPages(page, dialog)
   await navigatePanel(dialog, "Details")
@@ -357,25 +353,26 @@ async function smokeTest(context) {
   await dialog.getByRole("button", { name: "Test interaction" }).click()
   await status.filter({ hasText: "Test clicks: 1" }).waitFor()
   const styles = await dialog.evaluate((element) => {
-    const computed = getComputedStyle(element)
+    const computed = getComputedStyle(element), box = element.getBoundingClientRect(), parent = element.getRootNode().host.parentElement, parentBox = parent.getBoundingClientRect()
     return {
       background: computed.backgroundColor,
       width: element.getBoundingClientRect().width,
       insideShadow: element.getRootNode() instanceof ShadowRoot,
       portalEscaped: !!document.querySelector('[data-slot="dialog-content"]'),
+      fillsContentArea: Math.abs(box.left - parentBox.left - parent.clientLeft) < 1 && Math.abs(box.top - parentBox.top - parent.clientTop) < 1 && Math.abs(box.width - parent.clientWidth) < 1 && Math.abs(box.height - parent.clientHeight) < 1,
     }
   })
   assert.ok(styles.insideShadow)
   assert.equal(styles.portalEscaped, false)
   assert.ok(styles.width > 250, "Dialog layout styles did not apply.")
-  if (await page.evaluate(() => innerWidth >= 1280)) assert.ok(styles.width >= 1100, "Desktop dialog was not enlarged.")
+  assert.equal(styles.fillsContentArea, true, "Sync must fill the native content region.")
   assert.notEqual(styles.background, "rgba(0, 0, 0, 0)")
 
   const results = path.join(root, "test-results")
   await mkdir(results, { recursive: true })
   await dialog.screenshot({ path: path.join(results, "tampermonkey-details.png") })
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    await closeFromBackdrop(page, dialog)
+    await returnToVenice(page, dialog)
     await openSync(page)
     await openUiDiagnostics(dialog)
     await status.filter({ hasText: "Test clicks: 1" }).waitFor()
@@ -400,7 +397,7 @@ async function smokeTest(context) {
     storageOverview: "passed",
     storageRefresh: "passed",
     storage,
-    outsideBackdropDismissal: "passed",
+    nativeContentPageAndReturn: "passed",
     focusOutsideDismissalPrevented: true,
     closeAndReopen: "passed",
     escapeKey: "passed",
@@ -513,7 +510,7 @@ async function conversationTransferTest(context) {
   await waitForSignedInVenice(page)
   await page.bringToFront()
   const host = page.locator(`#${hostId}`)
-  const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
+  const dialog = host.getByRole("region", { name: "Venice Sync", exact: true })
   await openSync(page)
   await openConversations(dialog)
   await dialog.getByTestId("conversation-list").waitFor({ state: "visible", timeout: 30_000 })
@@ -579,7 +576,7 @@ async function selectedConversationTest(context, id) {
   await waitForSignedInVenice(page)
   await page.bringToFront()
   const host = page.locator(`#${hostId}`)
-  const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
+  const dialog = host.getByRole("region", { name: "Venice Sync", exact: true })
   await openSync(page)
   await openConversations(dialog)
   await dialog.getByTestId("conversation-list").waitFor({ state: "visible", timeout: 30_000 })
@@ -733,7 +730,7 @@ async function mindHistoryTransferTest(context, agentic = false) {
   await waitForSignedInVenice(page)
   await page.bringToFront()
   const host = page.locator(`#${hostId}`)
-  const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
+  const dialog = host.getByRole("region", { name: "Venice Sync", exact: true })
   const openMind = async () => {
     await openConversations(dialog)
     await waitForMindHistory(dialog)
@@ -834,7 +831,7 @@ async function selectedAgenticConversationTest(context, id) {
   await waitForSignedInVenice(page)
   await page.bringToFront()
   const host = page.locator(`#${hostId}`)
-  const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
+  const dialog = host.getByRole("region", { name: "Venice Sync", exact: true })
   await openSync(page)
   await openConversations(dialog)
   const baseline = await mindStorageSnapshot(page, [], "", id)
@@ -975,7 +972,7 @@ async function completeMindPackageTest(context) {
   await waitForSignedInVenice(page)
   await page.bringToFront()
   const host = page.locator(`#${hostId}`)
-  const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
+  const dialog = host.getByRole("region", { name: "Venice Sync", exact: true })
   const openPackages = async () => {
     await openSync(page)
     await navigatePanel(dialog, "Mind")
@@ -1160,7 +1157,7 @@ async function characterTransferTest(context, sourceId) {
   await waitForSignedInVenice(page)
   await page.bringToFront()
   const host = page.locator(`#${hostId}`)
-  const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
+  const dialog = host.getByRole("region", { name: "Venice Sync", exact: true })
   const openCharacters = async () => {
     await openSync(page)
     await navigatePanel(dialog, "Characters")
@@ -1352,7 +1349,7 @@ async function libraryTransferTest(context) {
   await page.goto("https://venice.ai/chat/agent", { waitUntil: "domcontentloaded" })
   await waitForSignedInVenice(page); await page.bringToFront()
   const host = page.locator(`#${hostId}`)
-  const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
+  const dialog = host.getByRole("region", { name: "Venice Sync", exact: true })
   const openLibrary = async () => {
     await openSync(page); await navigatePanel(dialog, "Library Assets")
     await dialog.getByTestId("library-asset-list").waitFor({ state: "visible", timeout: 45_000 })
@@ -1527,7 +1524,7 @@ async function studioSessionTransferTest(context, kind = "image") {
   }
   let zip = zipSync({ "manifest.json": strToU8(JSON.stringify(manifest)), ...Object.fromEntries(media.map(row => [row.fileName, fixture.buffer])) })
   const host = page.locator(`#${hostId}`)
-  const dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true }), requests = [], mediaRequests = [], pageErrors = []
+  const dialog = host.getByRole("region", { name: "Venice Sync", exact: true }), requests = [], mediaRequests = [], pageErrors = []
   page.on("pageerror", error => pageErrors.push(error.message))
   page.on("request", request => {
     if (request.url().startsWith("blob:") && request.resourceType() === "media") mediaRequests.push(request.url())
@@ -1650,7 +1647,7 @@ async function batchExportTest(context) {
   const prefix = `Venice-Sync-Studio-E2E-Batch-${Date.now()}`, ids = []
   const baseline = await libraryTestState(page)
   const studioName = `${prefix}-studio`, studioBaseline = (await studioTestState(page, studioName)).fingerprint
-  const host = page.locator(`#${hostId}`), dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
+  const host = page.locator(`#${hostId}`), dialog = host.getByRole("region", { name: "Venice Sync", exact: true })
   const fixture = JSON.parse(await readFile(path.join(root, "scripts/fixtures/classic-conversation.json"), "utf8"))
   fixture.conversation.name = `${prefix}-chat`
   const media = (await syntheticLibraryFiles(page, prefix))[0]
@@ -1705,15 +1702,13 @@ async function batchExportTest(context) {
     await openConversations(dialog)
     await dialog.locator(`[data-conversation-id="${first.id}"]`).getByRole("button", { name: `Add to export basket: ${fixture.conversation.name}`, exact: true }).click()
     await dialog.evaluate(async element => { await Promise.all(element.getAnimations().map(animation => animation.finished)) })
-    const contentBounds = await dialog.getByTestId("sync-panel").boundingBox()
+    const contentBounds = await dialog.boundingBox()
     await dialog.getByRole("button", { name: "Export basket (2)", exact: true }).click()
-    assert.deepEqual(await dialog.getByTestId("sync-panel").boundingBox(), contentBounds, "Opening the basket resized the content.")
-    const basket = dialog.getByRole("dialog", { name: "Content basket", exact: true })
+    assert.deepEqual(await dialog.boundingBox(), contentBounds, "Opening the basket resized the native page.")
+    const basket = dialog.getByRole("region", { name: "Content basket", exact: true })
     assert.equal(await dialog.getByRole("button", { name: "Back to content", exact: true }).evaluate(button => button.getRootNode().activeElement === button), true)
-    await page.keyboard.press("Shift+Tab")
-    assert.equal(await basket.evaluate(element => element.contains(element.getRootNode().activeElement)), true)
     await page.keyboard.press("Tab")
-    assert.equal(await dialog.getByRole("button", { name: "Back to content", exact: true }).evaluate(button => button.getRootNode().activeElement === button), true)
+    assert.equal(await basket.evaluate(element => element.contains(element.getRootNode().activeElement)), true)
     await page.keyboard.press("Escape")
     assert.equal(await dialog.isVisible(), true)
     assert.equal(await dialog.getByRole("button", { name: "Export basket (2)", exact: true }).evaluate(button => button.getRootNode().activeElement === button), true)
@@ -1782,7 +1777,7 @@ async function batchExportTest(context) {
       await page.setViewportSize({ width, height: 844 })
       await dialog.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
       await dialog.evaluate(async element => { await Promise.all(element.getAnimations().map(animation => animation.finished)) })
-      const basket = dialog.getByRole("dialog", { name: "Content basket", exact: true })
+      const basket = dialog.getByRole("region", { name: "Content basket", exact: true })
       await basket.screenshot({ path: path.join(root, `test-results/batch-basket-mobile-${width}.png`) })
       const layout = await basket.evaluate(element => ({
         overflow: element.scrollWidth > element.clientWidth || element.lastElementChild.scrollWidth > element.lastElementChild.clientWidth,
@@ -1835,7 +1830,7 @@ async function batchImportControlsTest(context) {
   await mkdir(resultsDirectory, { recursive: true })
   const journal = path.join(resultsDirectory, `${prefix}-committed-ids.jsonl`), committed = new Map()
   await writeFile(journal, "")
-  const dialog = page.locator(`#${hostId}`).getByRole("dialog", { name: "Venice Sync", exact: true })
+  const dialog = page.locator(`#${hostId}`).getByRole("region", { name: "Venice Sync", exact: true })
   const imports = dialog.getByRole("region", { name: "Selected batch import", exact: true })
   let observing = false, observationError, observer, writeRequested = false, captureTask = Promise.resolve()
   const capture = () => captureTask = captureTask.then(async () => {
@@ -1895,7 +1890,7 @@ async function batchImportControlsTest(context) {
     await imports.getByRole("button", { name: "Stop after current item", exact: true }).waitFor({ state: "visible", timeout: 5000 })
     assert.equal(await dialog.getAttribute("aria-busy"), "true")
     await page.keyboard.press("Escape")
-    assert.equal(await dialog.getByRole("dialog", { name: "Content basket", exact: true }).count(), 0)
+    assert.equal(await dialog.getByRole("region", { name: "Content basket", exact: true }).count(), 0)
     await page.keyboard.press("Escape"); await page.mouse.click(1, 1)
     assert.equal(await dialog.isVisible(), true, "A running import was dismissed.")
     assert.equal(await dialog.getAttribute("aria-busy"), "true")
@@ -1945,13 +1940,104 @@ async function batchImportControlsTest(context) {
   }
 }
 
+async function nativePageTest(context) {
+  const page = await context.newPage(), cdp = await context.newCDPSession(page), scripts = []
+  const artifact = await readFile(path.join(root, "dist/venice-sync.user.js")), body = artifact.toString("utf8").split("// ==/UserScript==")[1].trim()
+  cdp.on("Debugger.scriptParsed", event => { if (event.length >= body.length || /userscript/i.test(event.url)) scripts.push(event) })
+  await cdp.send("Debugger.enable")
+  try {
+    await page.goto("https://venice.ai/studio/library", { waitUntil: "domcontentloaded" })
+    await waitForSignedInVenice(page); await page.bringToFront()
+    await page.locator(`#${hostId}`).waitFor({ state: "attached", timeout: 45000 })
+    let matched = false
+    for (const script of scripts) {
+      const { scriptSource } = await cdp.send("Debugger.getScriptSource", { scriptId: script.scriptId })
+      if (scriptSource.includes(body)) { matched = true; break }
+    }
+    assert.equal(matched, true, "The executed Tampermonkey body must match this build.")
+    await cdp.detach()
+    const workspace = page.locator(`#${hostId}`).getByRole("region", { name: "Venice Sync", exact: true })
+    const matrix = []
+    for (const width of [1280, 390, 320]) {
+      await page.setViewportSize({ width, height: 844 })
+      await sidebarLauncher(page)
+      const url = page.url(), history = await page.evaluate(() => window.history.length)
+      await openSync(page)
+      await page.waitForFunction(id => {
+        const host = document.getElementById(id), region = host?.shadowRoot?.querySelector('[data-testid="sync-workspace"]')
+        if (!host || !region || host.parentElement === document.body) return false
+        const box = region.getBoundingClientRect(), parent = host.parentElement, parentBox = parent.getBoundingClientRect()
+        return Math.abs(box.left - parentBox.left - parent.clientLeft) < 1 && Math.abs(box.width - parent.clientWidth) < 1
+      }, hostId)
+      const originalChildren = await workspace.evaluateHandle(element => [...element.getRootNode().host.parentElement.children].filter(child => child.id !== "venice-sync-userscript-host"))
+      const geometry = await workspace.evaluate(element => {
+        const box = element.getBoundingClientRect(), frame = element.getRootNode().host.parentElement, frameBox = frame.getBoundingClientRect()
+        return { x: box.x, y: box.y, width: box.width, height: box.height,
+          fillsFrame: Math.abs(box.x - frameBox.x - frame.clientLeft) < 1 && Math.abs(box.y - frameBox.y - frame.clientTop) < 1 && Math.abs(box.width - frame.clientWidth) < 1 && Math.abs(box.height - frame.clientHeight) < 1,
+          overflow: element.scrollWidth > element.clientWidth }
+      })
+      assert.equal(geometry.fillsFrame, true); assert.equal(geometry.overflow, false)
+      assert.equal(page.url(), url); assert.equal(await page.evaluate(() => window.history.length), history)
+      assert.equal(await page.locator(`#${hostId}`).getByTestId("sync-backdrop").count(), 0)
+      assert.equal(await workspace.getByRole("dialog").count(), 0)
+      await navigatePanel(workspace, "Overview")
+      await workspace.screenshot({ path: path.join(root, `test-results/native-page-${width}.png`) })
+      if (width === 1280) {
+        assert.ok(geometry.x > 0, "Desktop Venice navigation must remain outside Sync.")
+        await navigatePanel(workspace, "Details")
+        assert.equal(await workspace.getByTestId("runtime-handler").innerText(), "Tampermonkey")
+        assert.equal(await workspace.getByText(packageJson.version, { exact: true }).count(), 1)
+        await openConversations(workspace)
+        const fixture = await readFile(path.join(root, "scripts/fixtures/classic-conversation.json"))
+        await workspace.getByLabel("Import conversation JSON", { exact: true }).setInputFiles({ name: "readonly-preview.json", mimeType: "application/json", buffer: fixture })
+        await workspace.getByTestId("import-preview").waitFor({ state: "visible" })
+        await returnToVenice(page, workspace)
+        await openSync(page)
+        assert.equal(await workspace.getByTestId("import-preview").isVisible(), true, "Returning must retain the read-only preview.")
+      } else {
+        assert.ok(geometry.x >= 0 && geometry.x + geometry.width <= width + 1)
+        await workspace.getByRole("button", { name: "Open Venice navigation", exact: true }).click()
+        const drawer = page.locator('[role="dialog"][aria-modal="true"]').filter({ visible: true })
+        await drawer.waitFor({ state: "visible" })
+        await page.locator(`#${launcherId}`).getByRole("button", { name: "Venice Sync", exact: true }).waitFor({ state: "visible", timeout: 15000 })
+        await page.getByRole("button", { name: /^(?:Toggle sidebar|切换侧边栏)$/i }).filter({ visible: true }).first().click()
+        await drawer.waitFor({ state: "hidden" }); await workspace.waitFor({ state: "visible" })
+      }
+      await workspace.getByRole("button", { name: "Export basket (0)", exact: true }).click()
+      const basket = workspace.getByRole("region", { name: "Content basket", exact: true })
+      await basket.waitFor({ state: "visible" })
+      assert.equal(await workspace.getByRole("dialog").count(), 0)
+      assert.equal(await workspace.getByTestId("batch-basket-overlay").count(), 0)
+      if (width !== 1280) {
+        assert.equal(await basket.getByRole("button", { name: "Open Venice navigation", exact: true }).isEnabled(), true)
+      }
+      await page.keyboard.press("Escape")
+      await workspace.getByRole("button", { name: "Back to Venice", exact: true }).waitFor({ state: "visible" })
+      await returnToVenice(page, workspace)
+      assert.equal(await originalChildren.evaluate(children => children.length > 0 && children.every(child => child.isConnected)), true, "Native content was unmounted.")
+      await originalChildren.dispose()
+      assert.equal(page.url(), url); assert.equal(await page.evaluate(() => window.history.length), history)
+      matrix.push({ viewport: width, ...geometry, mobileNavigation: width === 1280 ? "desktop sidebar preserved" : "native Drawer opened and closed", originalDOMRetained: true })
+    }
+    await page.setViewportSize({ width: 1280, height: 844 })
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    await openSync(page)
+    await page.locator('a[href="/minds"]').filter({ visible: true }).first().click()
+    await page.waitForURL(url => url.pathname === "/minds")
+    await workspace.waitFor({ state: "hidden" })
+    return { executedTampermonkeyBodyMatched: true, noSyntheticRouteOrHistory: "passed", noDialogOrBackdrop: "passed",
+      nativeNavigationReturnsToVenice: "passed", previewSurvivesReturn: "passed", matrix,
+      businessDataImports: 0, businessDataCleanup: 0, scriptEvaluatedByPlaywright: false }
+  } finally { await page.close() }
+}
+
 async function sidebarLauncherTest(context) {
   const page = await context.newPage()
   await page.goto("https://venice.ai/chat/agent", { waitUntil: "domcontentloaded" })
   await waitForSignedInVenice(page)
   await page.bringToFront()
   const originalSize = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))
-  const body = page.locator(`#${hostId}`), dialog = body.getByRole("dialog", { name: "Venice Sync", exact: true })
+  const body = page.locator(`#${hostId}`), dialog = body.getByRole("region", { name: "Venice Sync", exact: true })
   const launcher = page.locator(`#${launcherId}`).getByRole("button", { name: "Venice Sync", exact: true })
   const nativeToggle = () => page.getByRole("button", { name: /^(?:Toggle sidebar|切换侧边栏)$/i }).filter({ visible: true }).first()
   const fits = async () => {
@@ -2006,7 +2092,7 @@ async function sidebarLauncherTest(context) {
         assert.ok(bounds && bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= width + 1 && bounds.y + bounds.height <= 845)
         await dialog.getByRole("button", { name: "Details", exact: true }).click()
         assert.equal(await dialog.getByTestId("runtime-handler").innerText(), "Tampermonkey")
-        if (attempt === 0) await closeFromBackdrop(page, dialog)
+        if (attempt === 0) await returnToVenice(page, dialog)
         else await page.keyboard.press("Escape")
         await dialog.waitFor({ state: "hidden" })
         await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Show Sidebar")
@@ -2019,12 +2105,16 @@ async function sidebarLauncherTest(context) {
   } finally {
     await page.keyboard.press("Escape")
     await page.setViewportSize(originalSize)
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
     try { await ensureNativeSidebar(page) }
     finally { await page.close() }
   }
 }
 
 async function main() {
+  if (nativePage && (transfer || mindTransfer || agenticTransfer || charactersTransfer || libraryTransfer || studioTransfer || mindPackage || batchTransfer || batchControls)) {
+    throw new Error("--native-page is UI-only; do not combine it with transfer/import flags.")
+  }
   if (selectedConversation && !transfer) throw new Error("--conversation requires the explicit --transfer opt-in.")
   if (selectedAgentic && !agenticTransfer) throw new Error("--agentic-conversation requires --agentic-transfer.")
   if (selectedCharacter && !charactersTransfer) throw new Error("--character requires --characters.")
@@ -2065,6 +2155,7 @@ async function main() {
     }
     if (batchTransfer) result.batchExport = await batchExportTest(context)
     if (batchControls) result.batchImportControls = await batchImportControlsTest(context)
+    if (nativePage) result.nativePage = await nativePageTest(context)
     const artifact = await readFile(path.join(root, "dist/venice-sync.user.js"))
     const report = {
       timestamp: new Date().toISOString(),
@@ -2075,6 +2166,7 @@ async function main() {
       veniceRecordContentsReadByTest: transfer || mindTransfer || mindPackage || agenticTransfer || charactersTransfer || libraryTransfer || studioTransfer || batchTransfer || batchControls,
       veniceStorageWrittenByTest: transfer || mindTransfer || mindPackage || agenticTransfer || charactersTransfer || libraryTransfer || studioTransfer || batchTransfer || batchControls,
     }
+    await mkdir(path.join(root, "test-results"), { recursive: true })
     await writeFile(
       path.join(root, "test-results/e2e-result.json"),
       `${JSON.stringify(report, null, 2)}\n`,

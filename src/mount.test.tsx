@@ -2,6 +2,7 @@ import { act, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it } from "vitest"
 import { HOST_ID, mountApp } from "./mount"
+import { nativePageFixture } from "./test/native-page-fixture"
 
 let mounted: ReturnType<typeof mountApp> | undefined
 
@@ -10,10 +11,11 @@ afterEach(() => {
     if (mounted?.status === "mounted") mounted.unmount()
   })
   mounted = undefined
-  document.getElementById(HOST_ID)?.remove()
+  document.body.replaceChildren()
 })
 
 function setup() {
+  const native = nativePageFixture({ preview: true })
   act(() => {
     mounted = mountApp(
       { mode: "preview", handler: "Test preview", version: "test" },
@@ -24,7 +26,7 @@ function setup() {
   const container =
     host?.shadowRoot?.querySelector<HTMLElement>("[data-venice-sync-app]")
   if (!host || !container) throw new Error("UI was not mounted")
-  return { host, container, ui: within(container) }
+  return { host, container, ui: within(container), native }
 }
 
 describe("isolated UI", () => {
@@ -52,20 +54,20 @@ describe("isolated UI", () => {
     const user = userEvent.setup()
     const { host, ui } = setup()
     await user.click(ui.getByRole("button", { name: "Venice Sync" }))
-    const dialog = ui.getByRole("dialog", { name: "Venice Sync" })
+    const dialog = ui.getByRole("region", { name: "Venice Sync" })
     expect(dialog.getRootNode()).toBe(host.shadowRoot)
-    expect(ui.getByTestId("sync-backdrop").getRootNode()).toBe(host.shadowRoot)
+    expect(ui.queryByTestId("sync-backdrop")).toBeNull()
     expect(document.querySelector('[data-testid="sync-backdrop"]')).toBeNull()
     expect(document.querySelector('[role="dialog"]')).toBeNull()
     expect(ui.getByRole("heading", { name: "Download & upload" })).toBeVisible()
     expect(ui.queryByTestId("runtime-handler")).toBeNull()
-    expect(host.shadowRoot?.activeElement).toBe(ui.getByRole("button", { name: "Overview" }))
+    expect(host.shadowRoot?.activeElement).toBe(ui.getByRole("heading", { name: "Venice Sync" }))
     await user.click(ui.getByRole("button", { name: "Details" }))
     await user.click(ui.getByText("UI smoke test", { exact: true }))
     await user.click(ui.getByRole("button", { name: "Test interaction" }))
     expect(ui.getByRole("status")).toHaveTextContent("Test clicks: 1")
-    await user.click(ui.getByTestId("sync-backdrop"))
-    expect(ui.queryByRole("dialog")).toBeNull()
+    await user.click(ui.getByRole("button", { name: "Back to Venice" }))
+    expect(ui.queryByRole("region", { name: "Venice Sync" })).toBeNull()
   })
 
   it("reports an incompatible host instead of silently skipping", () => {
@@ -86,7 +88,7 @@ describe("isolated UI", () => {
     try {
       act(() => input.focus())
       expect(document.activeElement).toBe(input)
-      expect(ui.getByRole("dialog", { name: "Venice Sync" })).toBeVisible()
+      expect(ui.getByRole("region", { name: "Venice Sync" })).toBeVisible()
     } finally {
       input.remove()
     }

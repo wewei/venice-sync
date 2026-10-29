@@ -4,13 +4,26 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Venice Sync development preview</title>
+    <style>
+      body { margin: 0; font: 14px/1.5 system-ui, sans-serif; }
+      .preview-shell { display: flex; height: 100dvh; }
+      .preview-sidebar { box-sizing: border-box; flex: 0 0 240px; padding: 24px; background: #f5f5f5; }
+      main { box-sizing: border-box; position: relative; flex: 1; min-width: 0; padding: 24px; overflow: auto; }
+      @media (max-width: 639px) { .preview-sidebar { display: none; } }
+    </style>
   </head>
   <body>
-    <main>
-      <h1>Venice Sync dummy host page</h1>
-      <p>The floating launcher and dialog are mounted inside a Shadow DOM.</p>
-      <p>This preview does not exercise Tampermonkey or access Venice data.</p>
-    </main>
+    <div class="preview-shell">
+      <aside class="preview-sidebar" aria-label="Preview navigation"><strong>Venice preview</strong><p>Native navigation remains outside the Sync workspace.</p></aside>
+      <main data-venice-sync-preview-main>
+        <div>
+          <h1>Venice Sync dummy host page</h1>
+          <p>Sync replaces this main content area visually, without a route change.</p>
+          <p>This preview does not exercise Tampermonkey or access Venice data.</p>
+          <label>Draft preserved on return <textarea aria-label="Preview draft">Keep this draft unchanged.</textarea></label>
+        </div>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

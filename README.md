@@ -13,21 +13,22 @@ Cloud synchronization is not implemented.
 
 Use the basket-plus icon on any Conversation, Mind, Character, Library asset or
 Studio session to **add it to the export basket**. The basket is shared across
-pages while the Sync dialog stays open; switching pages does not lose selections.
+pages and when returning to Venice; switching pages does not lose selections.
 Adding the same type/ID again does not duplicate it. **Add all loaded ...** adds
 the entire currently loaded result, including rows behind **Show more**, not just
 visible cards. Unavailable sources are not included; their existing errors remain
 visible. Opening a page is still lazy; this is not an implicit whole-account backup.
 
-The compact **basket icon + count** sits to the right of the Sync panel title
+The compact **basket icon + count** sits to the right of the Sync page title
 (accessible name: **Export basket (N)**). Open it to review/remove entries or clear
 the basket in **To export**, then use **Download export basket** to download one ZIP.
-On desktop the basket overlays the right side **inside Sync**, without a permanent
-third column or narrowing the content. On phones it fills the panel's inner view.
-**Back to content**, Escape or the low-emphasis panel-local backdrop returns to
-the unchanged content page, preview, scroll position and selections. Keyboard
-focus stays in the basket while open and returns to its icon on dismissal.
-Closing Sync itself still discards the basket. Existing single-item downloads
+The basket is another full workspace view on both desktop and mobile, not an
+overlay, modal or permanent third column. **Back to content** or Escape returns
+to the unchanged content page, preview, scroll position and selections. Focus
+returns to the basket icon, without trapping the native Venice navigation.
+**Back to Venice** keeps the basket, opened backup, previews and completed results
+in memory; re-enter Sync to continue. Reloading discards this workspace.
+Existing single-item downloads
 remain available. Selecting a Mind chooses the entire definition/resources/saved
 Builder/Preview package, not parts of it. Mind chat histories remain separate
 items and do not automatically add the Mind definition. Existing per-type support
@@ -39,7 +40,7 @@ the first unsupported/missing/changed item rather than silently skipping it.
 Failure or cancellation produces **no partial batch** and retains the basket.
 Cancellation takes effect at asynchronous read/hash boundaries; an ongoing
 native read or synchronous ZIP operation cannot be interrupted immediately.
-Closing the dialog discards selections and prevents a pending export download.
+Returning to Venice cancels any pending export download without discarding selections.
 Finish ongoing editing/generation/imports first: individually checked exports
 are **not an atomic multi-item account snapshot**.
 
@@ -79,13 +80,15 @@ write/rollback finish before stopping. Attempted rows are disabled to prevent
 accidental retries, including failed rows whose cleanup may require inspection.
 Remaining unattempted items can be reviewed in a new selection.
 
-Keep the browser tab open during writes. Sync prevents its own dialog from
-closing during the running import, but cannot protect against closing the tab,
-browser shutdown or a crash. You may switch basket views or use **Back to content**
+Keep the browser tab open during writes. Sync disables **Back to Venice** and
+blocks ordinary native navigation during a running import, but cannot protect
+against closing the tab, browser shutdown or a crash. You may switch basket views or use **Back to content**
 while importing: this only hides the view, never cancels/unmounts the queue or
 discards its results. Reopen **Import from backup** to review them or stop after
-the current item. Sync itself remains locked against close, Escape and outside
-dismissal until the write finishes. There is no automatic page reload during a batch.
+the current item. Sync remains open when Escape or a native link is attempted until the write
+finishes. Native browser history is not intercepted; if the host content changes,
+the running workspace is retained and rebound rather than discarding its queue.
+There is no automatic page reload during a batch.
 After reviewing the results, use **Refresh Venice after reviewing results**
 once if any successful importer needs the native caches refreshed. A failed
 refresh is reported as an already-completed import, not an invitation to duplicate
@@ -152,29 +155,36 @@ npm run dev
 Open `http://127.0.0.1:5173/` for the local host-page preview. It deliberately
 identifies itself as a preview, not a Tampermonkey E2E result.
 
-On Venice, a **Sync icon next to the Venice Logo** opens the non-modal shadcn
-dialog. Its 44px click target sits before the native sidebar toggle; there is no
+On Venice, a **Sync icon next to the Venice Logo** opens a full content-area
+workspace. Its 44px click target sits before the native sidebar toggle; there is no
 bottom-right floating launcher over the chat composer. The entry is hidden when
 the desktop sidebar is collapsed or the mobile sidebar is closed. Open the
 sidebar to find it. Native responsive/SPA header replacements reconnect the same
 isolated launcher without moving Venice's Logo or native controls.
 
 On mobile, tapping Sync first closes Venice's modal sidebar and waits for its
-focus/ARIA isolation to end before opening the panel. Closing Sync returns focus
+focus/ARIA isolation to end before entering Sync. Returning to Venice restores focus
 to the native sidebar opener; desktop focus returns to the Sync icon. A native
-sidebar that cannot close reports an error instead of opening a hidden panel.
-The launcher has its own small Shadow DOM, while the panel's styles and portal
-remain in the independent body Shadow DOM. If the native header is unavailable
+sidebar that cannot close reports an error instead of opening a hidden page.
+The launcher has its own small Shadow DOM. The workspace's Shadow DOM is attached
+inside the native main-content container, isolated below native navigation portals.
+The original native content remains mounted and is temporarily inert/ARIA-hidden;
+its original attributes, styles, scroll and selection are restored on return.
+If the native header is unavailable
 or too narrow, no floating fallback is added. Only the standalone local
-development preview retains the floating launcher.
+development preview retains the floating launcher and an explicitly dummy host layout.
 
-Host-page focus changes do not dismiss the dialog. A light, 15% black backdrop
-without blur covers the page outside Sync; click it or press Escape to close.
-There is no top-right close button: that space belongs to the basket icon.
-The basket's own backdrop stays inside Sync, and Escape first returns from the
-basket to the content page. During batch writes, neither Escape nor the outer
-backdrop can close Sync or discard results.
-The dialog opens on **Overview**, showing what can be downloaded or uploaded:
+There is no dialog, backdrop, URL change or synthetic route/history entry.
+Sync fills the existing main-content area while Venice's navigation stays usable.
+On mobile, **Open Venice navigation** opens the real native Drawer, including
+from the basket view. **Back to Venice**, the active Sync icon, or Escape returns
+to the original page; Escape first returns from the basket to the content page.
+Clicking outside the workspace does not dismiss it. An ordinary native navigation
+link returns to Venice before the host handles its own route.
+During batch writes, returning and native navigation are blocked with an explicit
+status instead of discarding the queue. If the native content region cannot be
+identified, an explicit error is shown; no whole-viewport overlay fallback is used.
+The workspace first opens on **Overview**, showing what can be downloaded or uploaded:
 
 | Content page | Download | Upload |
 | --- | --- | --- |
@@ -189,8 +199,9 @@ The dialog opens on **Overview**, showing what can be downloaded or uploaded:
 Mind conversation history belongs under **Conversations**, not the **Mind**
 definition page. The latter includes its saved editor Assistant and
 Preview threads, not ordinary chat sessions. Upload means local file import, not cloud upload.
-The dialog is up to 1152px wide and 864px high on desktop, constrained to the
-viewport on small screens. Content rows emphasize titles and local Mind avatars;
+The workspace follows the native content container's full width and height;
+category navigation adapts to that container rather than the whole viewport.
+Content rows emphasize titles and local Mind avatars;
 download/upload/refresh actions use Tabler icons with accessible names and hover
 titles. Confirmation and cancel actions retain text to make writes explicit.
 
@@ -204,7 +215,7 @@ types have working text-history download actions. If one storage source fails, i
 error is shown and the other source's loaded rows remain usable. A single upload
 icon/file input detects Classic, Mind and Agentic archive formats before preview.
 Conversation file previews survive switching subpages
-while the dialog stays open; closing the dialog discards the preview.
+when switching pages or returning to Venice; a page reload discards the preview.
 
 Runtime identity, the in-memory smoke-test counter, and raw storage information
 are kept under **Details**, away from the transfer overview. Open **Details >
@@ -334,12 +345,12 @@ for the implemented boundaries.
    new conversation/message IDs, binds the current account, removes folder and
    temporary-session state, and inserts a permanent chat. Existing IDs are never
    overwritten. After the transaction succeeds, the current page automatically
-   reloads at the same URL so Venice's native sidebar refreshes too. The dialog
-   closes; reopen it with the launcher if needed. Save unsent drafts and finish
+   reloads at the same URL so Venice's native sidebar refreshes too. The workspace
+   resets; reopen it with the launcher if needed. Save unsent drafts and finish
    ongoing generation before confirming, as the preview warns.
 
 Failed or cancelled imports do not reload the page. If the import commits but
-reloading is blocked, the panel explicitly reports that the import succeeded and
+reloading is blocked, the workspace explicitly reports that the import succeeded and
 offers the imported-chat link; reload manually rather than importing a second
 copy. The script does not use private React internals to alter Venice's cache.
 
@@ -581,14 +592,14 @@ On Venice, click **Venice Sync** and confirm:
 2. In **Details**, runtime is **Tampermonkey**, mode is **userscript**, and version
    is **0.3.0**. Expanding **UI smoke test** and clicking **Test interaction**
    changes **Test clicks: 0** to **Test clicks: 1**.
-3. Closing and reopening the dialog works.
+3. Back to Venice restores the original page; re-entering Sync retains its workspace.
 4. Reloading the page mounts one launcher beside the Logo in the expanded
    sidebar and resets the counter. Collapsing/reopening or switching pages never
    creates duplicate launchers.
 5. Venice's existing interface and styles remain intact.
 6. Expanded **Details > Storage metadata** shows the current origin's keys, databases and counts;
-   **Refresh storage** rereads them. Long lists scroll without hiding the close
-   button. Metadata does not show stored values or chat content.
+   **Refresh storage** rereads them. Long lists scroll independently of page navigation.
+   Metadata does not show stored values or chat content.
 7. Conversation JSON selection shows a preview and reload warning; confirmation
    creates a new chat and automatically reloads the same page. Venice's native
    sidebar shows the imported chat without another manual refresh or navigation.
@@ -606,8 +617,9 @@ npm test
 npm run build
 ```
 
-Unit tests cover runtime identity, isolated mounting, duplicate injection, dialog
-portal placement, button interaction, storage metadata/counts, refresh, denied
+Unit tests cover runtime identity, isolated mounting, duplicate injection, native
+content-region binding/restoration, retained workspace state, write guards,
+button interaction, storage metadata/counts, refresh, denied
 access, partial failures, timeouts, and avoiding accidental database creation.
 IndexedDB fixtures use fake-indexeddb only in tests. Browser and Tampermonkey
 checks are a separate validation layer.
@@ -632,6 +644,21 @@ instead of accidentally using your everyday Chrome profile. For example:
 $env:CDP_ENDPOINT = "http://127.0.0.1:9223"
 npm run test:e2e -- --install --batch
 ```
+
+For read-only full-page UI validation on the selected Testing instance:
+
+```powershell
+$env:CDP_ENDPOINT = "http://127.0.0.1:9223"
+# Optional isolated build-server port; the default is 4173.
+$env:USERSCRIPT_URL = "http://127.0.0.1:5202/venice-sync.user.js"
+npm run test:e2e -- --install --native-page
+```
+
+`--native-page` verifies the actual executed userscript body, native content
+geometry at 1280/390/320px, real mobile navigation, original DOM restoration,
+read-only file-preview retention, absence of modal/backdrop layers and unchanged
+URL/history on entry/return. It cannot be combined with data-transfer flags and
+does not confirm imports or delete content.
 
 For a bounded basket-only run without repeating the launcher/storage smoke
 suite, use `--batch-only` instead of `--batch` (optionally with `--install`).
@@ -725,12 +752,12 @@ opens Details to check the real manager identity and diagnostic button. It verif
 Shadow DOM portal placement and rendered styles,
 compares displayed storage summaries against the page's actual storage metadata,
 checks refresh,
-checks the Shadow DOM backdrop and outside dismissal, repeats close/reopen three times,
+checks native main-area placement and Back to Venice, repeats return/re-enter three times,
 tests Escape, then reloads its own tab to check reinjection.
 It also verifies the native Logo-adjacent 44px target, desktop collapse/expand,
 keyboard opening/focus restoration and SPA navigation. Dedicated 390px/320px
 checks repeatedly open the native mobile sidebar, tap Sync, verify the Drawer
-and its ARIA isolation are gone before interacting with the panel, then verify
+and its ARIA isolation are gone before interacting with the workspace, then verify
 focus returns to the sidebar opener. There is no body-floating entry remaining
 over the mobile composer. These are desktop Chrome viewport tests, not physical
 phone/browser validation.
@@ -745,7 +772,7 @@ Transfer checks observe the userscript-triggered same-URL reload and assert that
 the native sidebar contains the new chat before any manual reload or navigation.
 Neither mode edits existing conversations or sends inference requests. It leaves
 its tabs open and disconnects without closing Chrome.
-The report and dialog-only overview/mobile/details screenshots are written to
+The report and workspace-only overview/mobile/details screenshots are written to
 ignored `test-results/`.
 Installation interception and Chrome's user-script permissions must be enabled;
 otherwise install manually using the instructions above and retry.
@@ -757,7 +784,8 @@ otherwise install manually using the instructions above and retry.
 - `src/mount.tsx`: idempotent Shadow DOM mount.
 - `src/SidebarLauncher.tsx`: isolated native-header icon and explicit opening errors.
 - `src/sidebar-launcher.ts`: native header lifecycle/space guards and mobile Drawer sequencing.
-- `src/App.tsx`: non-modal panel and retained smoke-test counter.
+- `src/App.tsx`: native-looking workspace, return/navigation guards and retained session state.
+- `src/native-page.ts`: guarded main-content discovery, Shadow host binding and exact native DOM restoration.
 - `src/SyncPanel.tsx`: four content pages, transfer overview and lazy Details diagnostics.
 - `src/BatchBasket.tsx`: shared shopping-basket selection, progress/cancel and read-only extraction.
 - `src/batch-format.ts`: bounded object-addressed batch ZIP and standalone file reconstruction.

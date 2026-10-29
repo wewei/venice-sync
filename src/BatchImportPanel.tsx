@@ -13,6 +13,11 @@ export function BatchImportPanel({ archive, busy, onBusyChange, onImportingChang
   const [error, setError] = useState<string>(), [notice, setNotice] = useState<string>()
   const [running, setRunning] = useState(false), [needsReload, setNeedsReload] = useState(false)
   const abort = useRef<AbortController | undefined>(undefined), active = useRef(true)
+  const stop = useRef<HTMLButtonElement>(null), log = useRef<HTMLDivElement>(null), summary = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const target = running ? stop.current : log.current ?? summary.current
+    target?.focus({ preventScroll: true })
+  }, [running])
   useEffect(() => {
     active.current = true
     return () => { active.current = false; abort.current?.abort() }
@@ -85,10 +90,12 @@ export function BatchImportPanel({ archive, busy, onBusyChange, onImportingChang
       <Button disabled={busy || unresolvedBatchDestinations(plan, destinations).length > 0} onClick={() => void confirm()}>Confirm selected batch import</Button>
       <Button variant="outline" disabled={busy} onClick={() => setPlan(undefined)}>Cancel batch import preview</Button>
     </div>}
-    {running && <Button variant="outline" onClick={() => abort.current?.abort()}>Stop after current item</Button>}
-    {error && <p role="alert">{error}</p>}
-    {notice && <p role="status">{notice}</p>}
-    {!!results.length && <div role="log" aria-label="Batch import results" className="grid min-w-0 gap-1">
+    {running && <Button ref={stop} variant="outline" onClick={() => abort.current?.abort()}>Stop after current item</Button>}
+    {(error || notice) && <div ref={summary} tabIndex={-1} className="outline-none">
+      {error && <p role="alert">{error}</p>}
+      {notice && <p role="status">{notice}</p>}
+    </div>}
+    {!!results.length && <div ref={log} tabIndex={-1} role="log" aria-label="Batch import results" className="grid min-w-0 gap-1 outline-none">
       {results.map(result => <p key={result.key} data-batch-result-key={result.key} data-batch-result-status={result.status} data-batch-new-id={result.id}>{result.status === "success" ? "Imported" : "Failed"}: {result.kind} · {result.title}{result.id ? ` · New ID: ${result.id}` : ""}{result.error ? ` · ${result.error}` : ""}</p>)}
     </div>}
     {needsReload && <Button disabled={busy} onClick={() => {
