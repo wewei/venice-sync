@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { chromium } from "playwright-core"
@@ -21,8 +21,10 @@ const agenticTransfer = process.argv.includes("--agentic-transfer")
 const charactersTransfer = process.argv.includes("--characters")
 const libraryTransfer = process.argv.includes("--library")
 const studioTransfer = process.argv.includes("--studio-sessions")
-const batchOnly = process.argv.includes("--batch-only")
-const batchTransfer = process.argv.includes("--batch") || batchOnly
+const batchControls = process.argv.includes("--batch-controls")
+const batchOnly = process.argv.includes("--batch-only") || batchControls
+const batchTransfer = process.argv.includes("--batch") || process.argv.includes("--batch-only")
+let preserveFixturePage = false
 const mindPackage = process.argv.includes("--mind-package")
 const selectedConversation = process.argv.find((argument) => argument.startsWith("--conversation="))?.slice("--conversation=".length)
 const selectedAgentic = process.argv.find((argument) => argument.startsWith("--agentic-conversation="))?.slice("--agentic-conversation=".length)
@@ -1825,6 +1827,142 @@ async function batchExportTest(context) {
   }
 }
 
+async function batchImportControlsTest(context) {
+  const page = await context.newPage()
+  await page.goto("https://venice.ai/chat/classic", { waitUntil: "domcontentloaded" })
+  await waitForSignedInVenice(page); await page.bringToFront()
+  const prefix = `Venice-Sync-Controls-${crypto.randomUUID()}`
+  const probeName = `veniceSyncProbe${crypto.randomUUID().replaceAll("-", "")}`
+  const baseline = await libraryTestState(page)
+  const fixture = JSON.parse(await readFile(path.join(root, "scripts/fixtures/classic-conversation.json"), "utf8"))
+  const total = 40, expected = {}, objects = {}, items = []
+  for (let index = 0; index < total; index++) {
+    const file = structuredClone(fixture), name = `${prefix}-${index}`
+    file.conversation.name = name
+    for (const [position, message] of file.messages.entries()) message.content = `${name} / message ${position}`
+    expected[name] = file.messages.map(message => `${message.role}:${message.content}`).sort()
+    const bytes = strToU8(JSON.stringify(file)), hash = createHash("sha256").update(bytes).digest("hex")
+    objects[`objects/${hash}`] = bytes
+    items.push({ kind: "classic", id: crypto.randomUUID(), title: name, filename: `fixture-${index}.json`, packaging: "json",
+      files: [{ path: "export.json", object: hash, bytes: bytes.length }] })
+  }
+  const archive = Buffer.from(zipSync({ "manifest.json": strToU8(JSON.stringify({
+    format: "venice-sync-batch", version: 1, exportedAt: new Date().toISOString(), items,
+  })), ...objects }))
+  const resultsDirectory = path.join(root, "test-results")
+  await mkdir(resultsDirectory, { recursive: true })
+  const journal = path.join(resultsDirectory, `${prefix}-committed-ids.jsonl`), committed = new Map()
+  await writeFile(journal, "")
+  const dialog = page.locator(`#${hostId}`).getByRole("dialog", { name: "Venice Sync", exact: true })
+  const imports = dialog.getByRole("region", { name: "Selected batch import", exact: true })
+  let observing = false, observationError, observer, writeRequested = false, captureTask = Promise.resolve()
+  const capture = () => captureTask = captureTask.then(async () => {
+    const rows = await page.evaluate(name => globalThis[name].scan(), probeName)
+    for (const row of rows) if (!committed.has(row.id)) {
+      await appendFile(journal, `${JSON.stringify({ ...row, observedAt: new Date().toISOString() })}\n`)
+      committed.set(row.id, row)
+    }
+    return rows
+  })
+  try {
+    await page.evaluate(async ({ prefix, expected, probeName }) => {
+      const db = await new Promise((resolve, reject) => {
+        const id = `venice-sync-controls-${crypto.randomUUID()}`, chunk = `venice-sync/${id}.js`
+        const timer = setTimeout(() => reject(new Error("Native Classic control probe timed out.")), 5000)
+        try {
+          globalThis.TURBOPACK.push([chunk, id, runtime => { try { clearTimeout(timer); resolve(runtime.r(342219).db) } catch (error) { reject(error) } }])
+          Promise.resolve(globalThis.TURBOPACK.push([chunk, { otherChunks: [], runtimeModuleIds: [id] }])).catch(reject)
+        } catch (error) { clearTimeout(timer); reject(error) }
+      })
+      if (db.name !== "venice-db-encrypted" || db.verno !== 31) throw new Error("Unsupported native Classic control database.")
+      const initial = await db.conversations.toArray(), originalIds = new Set(initial.map(row => row.id))
+      if (initial.some(row => row.name?.startsWith(prefix))) throw new Error("Fixture namespace already exists.")
+      const owner = globalThis.Clerk.user.id
+      globalThis[probeName] = { scan: async () => {
+        const rows = (await db.conversations.toArray()).filter(row => row.name?.startsWith(prefix))
+        for (const row of rows) {
+          if (originalIds.has(row.id) || !/^[a-f0-9-]{36}$/.test(row.id) || row.ownerId !== owner || !expected[row.name]) throw new Error("Unverified control fixture identity.")
+          const messages = await db.messages.where("conversationId").equals(row.id).toArray()
+          const contents = messages.map(message => `${message.role}:${message.content}`).sort()
+          if (JSON.stringify(contents) !== JSON.stringify(expected[row.name]) ||
+            await db.messageIds.where("conversationId").equals(row.id).count() !== messages.length) throw new Error("Unverified control fixture contents.")
+        }
+        return rows.map(row => ({ id: row.id, name: row.name }))
+      } }
+    }, { prefix, expected, probeName })
+    await capture()
+    observing = true
+    observer = (async () => {
+      while (observing) { await capture(); await new Promise(resolve => setTimeout(resolve, 25)) }
+    })().catch(error => { observationError = error; observing = false; console.error("Committed-ID observation failed:", error) })
+    await openSync(page); await navigatePanel(dialog, "Details")
+    assert.equal(await dialog.getByTestId("runtime-handler").innerText(), "Tampermonkey")
+    assert.equal(await dialog.getByTestId("runtime-mode").innerText(), "userscript")
+    assert.equal(await dialog.getByText(packageJson.version, { exact: true }).count(), 1)
+    await dialog.getByRole("button", { name: "Export basket (0)", exact: true }).click()
+    await dialog.getByRole("button", { name: "Import from backup", exact: true }).click()
+    await dialog.getByLabel("Open batch ZIP", { exact: true }).setInputFiles({ name: "controls.zip", mimeType: "application/zip", buffer: archive })
+    await imports.getByRole("button", { name: "Select all unattempted items", exact: true }).click()
+    await imports.getByRole("button", { name: `Review ${total} selected imports`, exact: true }).click()
+    await imports.getByTestId("batch-import-preview").waitFor()
+    assert.deepEqual(await libraryTestState(page), baseline, "Control selection/review wrote native data.")
+    if (observationError) throw observationError
+    const originBefore = await page.evaluate(() => performance.timeOrigin)
+    preserveFixturePage = true; writeRequested = true
+    await imports.getByRole("button", { name: "Confirm selected batch import", exact: true }).click()
+    await imports.getByRole("button", { name: "Stop after current item", exact: true }).waitFor({ state: "visible", timeout: 5000 })
+    assert.equal(await dialog.getByRole("button", { name: "Close", exact: true }).count(), 0)
+    await page.keyboard.press("Escape")
+    assert.equal(await dialog.getByRole("dialog", { name: "Content basket", exact: true }).count(), 0)
+    await page.keyboard.press("Escape"); await page.mouse.click(1, 1)
+    assert.equal(await dialog.isVisible(), true, "A running import was dismissed.")
+    assert.equal(await dialog.getByRole("button", { name: "Close", exact: true }).count(), 0)
+    await dialog.getByRole("button", { name: "Export basket (0)", exact: true }).click()
+    await imports.getByRole("button", { name: "Stop after current item", exact: true }).click()
+    await page.waitForFunction(id => ![...document.getElementById(id).shadowRoot.querySelectorAll("button")]
+      .some(button => button.textContent === "Stop after current item"), hostId, { timeout: 60000 })
+    await capture()
+    const results = await imports.locator("[data-batch-result-key]").evaluateAll(nodes => nodes.map(node => ({
+      id: node.getAttribute("data-batch-new-id"), status: node.getAttribute("data-batch-result-status"),
+    })))
+    assert.ok(results.length > 0 && results.length < total, `Cancellation must leave later items unattempted; got ${results.length}/${total}.`)
+    assert.ok(results.every(result => result.status === "success" && committed.has(result.id)), "A completed native copy was not independently recorded.")
+    assert.equal(committed.size, results.length)
+    assert.equal(await imports.locator('input[type="checkbox"]:disabled').count(), results.length)
+    assert.equal(await page.evaluate(() => performance.timeOrigin), originBefore)
+    assert.equal(await dialog.getByRole("button", { name: "Close", exact: true }).count(), 1)
+    await dialog.getByRole("button", { name: "Back to content", exact: true }).click()
+    await dialog.getByRole("button", { name: "Export basket (0)", exact: true }).click()
+    assert.equal(await imports.locator("[data-batch-result-key]").count(), results.length)
+    return { runtime: "Tampermonkey", attempted: results.length, unattempted: total - results.length,
+      escapeAndOutsideCloseLockedDuringWrites: "passed", stopOnlyPreventsLaterItems: "passed",
+      committedIdsRecordedIndependently: "passed", attemptedRowsDisabled: "passed",
+      resultsSurviveCollapse: "passed", noIntermediateReload: "passed", journal: path.relative(root, journal),
+      scriptEvaluatedByPlaywright: false }
+  } finally {
+    if (writeRequested) {
+      const stop = imports.locator("button").filter({ hasText: /^Stop after current item$/ })
+      if (await stop.count()) {
+        const trigger = dialog.getByRole("button", { name: "Export basket (0)", exact: true })
+        if (await trigger.getAttribute("aria-expanded") !== "true") await trigger.click()
+        await stop.click()
+        await page.waitForFunction(id => ![...document.getElementById(id).shadowRoot.querySelectorAll("button")]
+          .some(button => button.textContent === "Stop after current item"), hostId, { timeout: 60000 })
+      }
+    }
+    observing = false
+    await observer
+    if (await page.evaluate(name => !!globalThis[name], probeName)) {
+      const verified = await capture()
+      assert.deepEqual(verified.map(row => row.id).sort(), [...committed.keys()].sort())
+      await cleanupSyntheticChats(page, verified.map(row => row.id))
+    }
+    assert.deepEqual(await libraryTestState(page), baseline, "Control fixture cleanup changed pre-existing data.")
+    preserveFixturePage = false
+    await page.close()
+  }
+}
+
 async function sidebarLauncherTest(context) {
   const page = await context.newPage()
   await page.goto("https://venice.ai/chat/agent", { waitUntil: "domcontentloaded" })
@@ -1944,6 +2082,7 @@ async function main() {
       image: await studioSessionTransferTest(context), audio: await studioSessionTransferTest(context, "audio"),
     }
     if (batchTransfer) result.batchExport = await batchExportTest(context)
+    if (batchControls) result.batchImportControls = await batchImportControlsTest(context)
     const artifact = await readFile(path.join(root, "dist/venice-sync.user.js"))
     const report = {
       timestamp: new Date().toISOString(),
@@ -1951,8 +2090,8 @@ async function main() {
       artifactSha256: createHash("sha256").update(artifact).digest("hex"),
       installedViaTampermonkeyUiThisRun: install,
       ...result,
-      veniceRecordContentsReadByTest: transfer || mindTransfer || mindPackage || agenticTransfer || charactersTransfer || libraryTransfer || studioTransfer || batchTransfer,
-      veniceStorageWrittenByTest: transfer || mindTransfer || mindPackage || agenticTransfer || charactersTransfer || libraryTransfer || studioTransfer || batchTransfer,
+      veniceRecordContentsReadByTest: transfer || mindTransfer || mindPackage || agenticTransfer || charactersTransfer || libraryTransfer || studioTransfer || batchTransfer || batchControls,
+      veniceStorageWrittenByTest: transfer || mindTransfer || mindPackage || agenticTransfer || charactersTransfer || libraryTransfer || studioTransfer || batchTransfer || batchControls,
     }
     await writeFile(
       path.join(root, "test-results/e2e-result.json"),
@@ -1961,7 +2100,8 @@ async function main() {
     console.log(JSON.stringify(report, null, 2))
   } finally {
     try {
-      for (const page of context?.pages() ?? []) if (!previousPages.has(page)) await page.close()
+      if (preserveFixturePage) console.error("Preserving the fixture tab: writes or cleanup could not be verified. Inspect the committed-ID journal before retrying.")
+      else for (const page of context?.pages() ?? []) if (!previousPages.has(page)) await page.close()
     } finally { await browser.close() }
   }
 }

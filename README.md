@@ -624,6 +624,16 @@ It checks the installed Tampermonkey runtime before the basket transfers.
 The runner closes only tabs it created, including after a failure; pre-existing
 tabs are preserved.
 
+`--batch-controls` runs only the active-import controls against 40 uniquely marked
+synthetic Classic items: Escape/outside dismissal stays locked during writes,
+the basket can hide without losing the queue, and **Stop after current item**
+leaves later items unattempted. A read-only native probe independently records
+committed IDs under `test-results/*-committed-ids.jsonl`, without waiting for UI
+success callbacks. Cleanup verifies new identities and exact fixture contents,
+deletes only those copies, and compares the pre-existing store fingerprints.
+If writes or cleanup cannot be verified, the fixture tab and ID journal are kept
+for inspection instead of closing it or guessing what to delete.
+
 Sign in to Venice and install Tampermonkey in that instance independently.
 Enable **Allow user scripts** in that instance's extension details too; an
 enabled extension alone is insufficient. Neither credentials nor browser profile
