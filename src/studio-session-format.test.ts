@@ -32,6 +32,12 @@ describe("Studio session ZIP", () => {
       (m: typeof pkg.manifest) => { m.files.pop() },
       (m: typeof pkg.manifest) => { m.media[0].imageSettings = { reference: "media/other/file.png" } },
       (m: typeof pkg.manifest) => { m.media[0].imageSettings = { width: Infinity } },
+      (m: typeof pkg.manifest) => { m.media[0].inputGroupId = crypto.randomUUID() },
+      (m: typeof pkg.manifest) => { m.media[0].imageSettings = { maskMedia: { id: crypto.randomUUID() } } },
+      (m: typeof pkg.manifest) => { m.media[0].unknownEvenIfAbsent = undefined },
+      (m: typeof pkg.manifest) => { m.turns[0].mode = "future-mode" },
+      (m: typeof pkg.manifest) => { m.media[0].imageSettings = { hideWatermark: "not-a-boolean" } },
+      (m: typeof pkg.manifest) => { m.media[0].imageSettings = { loraStrength: "not-a-number" } },
     ]
     for (const change of variants) {
       const copy = structuredClone(pkg.manifest); change(copy)

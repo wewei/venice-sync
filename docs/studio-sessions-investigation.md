@@ -194,3 +194,39 @@ venice-sync-studio-session v1 (ZIP)
 
 第一版对音频 `sourceAudio`（账户级附件目录）、账户绑定克隆声音、自定义/远程封面、
 未知字幕形状明确拒绝，不会静默丢弃。新编排器与视频 Session 继续等待专门调查。
+
+## 8. 实际历史兼容修复（2026-10-29）
+
+在原 profile 的专属临时 tab 中，通过原生模块 `342219` 的 Dexie v31
+读取三个已存在的图片会话（共 17 turns、47 media），不解密搬运密钥，
+不调用生成或发布。实际失败原因与修复边界如下：
+
+| 合成回归类别 | 实际原因 | 处理 |
+| --- | --- | --- |
+| generate-optionals | producer 建立了 `inputGroupId/isUserUploaded=undefined` 等属性；原白名单先拒绝字段名 | 识别原生已知未设置属性；有值的分组/上传元信息仍拒绝 |
+| remove-background | 历史编辑 turn 使用 `mode=remove`，原校验仅接受 edit | 保留 remove 模式及 remove-bg 输出；完整带上 input 原件并重建引用 |
+| edit-optionals | `quality/resolution=undefined` 等合法可选设置被原标量校验拒绝 | 接受已知可选的未设置状态，保留所有有值设置 |
+
+生成实例同时确认了 `loraStrength`（number）和 `hideWatermark`（boolean）。
+原生保存函数 `persistImageStudioGeneration` 写入上述元信息，
+`saveConversationMedia` 仍将原件写入同 session 的媒体命名空间。
+对应 loader 从 turn 补充缺省 prompt，不应为了通过校验给媒体伪造 prompt。
+导出应保留原生字段的缺席/未设置状态，而不是补猜测值。
+
+原生还支持把 mask/doodle 移入 OPFS 并写成 `maskMedia/doodleMedia`。
+本次三个实例没有这些引用，也没有有值的 inputGroupId/isUserUploaded；
+它们继续明确拒绝。未知 schema、字段、模式、活动任务、缺失输出、
+外来 selection/input、缺失文件和校验和错误保护保持不变。
+合成回归使用新占位 UUID、提示词和字节，不包含真实用户内容。
+
+真实源端验证使用 Chrome 156.0.8078.48 和 Tampermonkey 自身 installer
+安装本 worktree build，不通过 Playwright 注入 userscript。
+三个实际 ZIP 分别包含 1/5/11 turns、1/14/32 个原件，
+原件总大小分别为 265,488 / 25,495,294 / 60,993,009 bytes。
+导出的每个有值逻辑字段与原生解密行一致，47 个原件逐文件 SHA-256 匹配。
+Library 列表首屏 24 项且无来源错误，实际单资产原件导出匹配。
+源端 11 张相关 Dexie 表、6 个 RxDB collection 及 media/minds/discover
+共 56 个原件的前后指纹完全一致；Studio 三张逻辑表还匹配先前迁移记录的基线指纹。
+此处的源端导出验证不等于目标浏览器已完成导入或原生编辑器恢复。
+后续同 profile 的三例往返验收因调试连接权限中断，尚未完整完成；
+不能把源导出成功或合成回归当作三个实际会话的新引用重建/再导出证明。

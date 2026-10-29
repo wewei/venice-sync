@@ -28,29 +28,37 @@ export interface LibraryAsset {
   kind: LibraryKind; mimeType: string; createdAt: number; path: string
   metadata: Record<string, unknown>; originalSource?: LibraryManifest["asset"]["source"]; unavailableReason?: string
 }
+export interface LibrarySourceError { source: LibraryAsset["source"]; message: string }
+export interface LibraryAssets { assets: LibraryAsset[]; errors: LibrarySourceError[] }
 
 function isTable(value: unknown): value is NativeTable {
   return isRecord(value) && typeof value.name === "string" && ["get", "add", "where", "toArray"].every((key) => typeof value[key] === "function")
 }
-async function libraryApi(): Promise<LibraryApi> {
-  const [repository, media] = await Promise.all([loadNativeModule(342219), loadNativeModule(516029)])
+async function libraryLocation(): Promise<LibraryApi["location"]> {
+  const media = await loadNativeModule(516029)
+  if (!isRecord(media) || typeof media.resolveMediaLocationParams !== "function") throw new Error("Unsupported native Library file layout.")
+  const resolve = media.resolveMediaLocationParams
+  return (conversationId, id, mimeType) => {
+    const location: unknown = resolve({ conversationId, id, mimeType })
+    if (!isRecord(location) || typeof location.filePath !== "string" || typeof location.fileName !== "string") throw new Error("Invalid native media location.")
+    return `${location.filePath}/${location.fileName}`
+  }
+}
+async function libraryApi(names: string[]): Promise<LibraryApi> {
+  const [repository, location] = await Promise.all([loadNativeModule(342219), libraryLocation()])
   if (!isRecord(repository) || !isRecord(repository.db) || repository.db.name !== "venice-db-encrypted" || repository.db.verno !== 31 ||
-      typeof repository.db.transaction !== "function" || !isRecord(media) || typeof media.resolveMediaLocationParams !== "function") {
+      typeof repository.db.transaction !== "function") {
     throw new Error("Unsupported native Library repository/file layout.")
   }
-  const transaction = repository.db.transaction.bind(repository.db), db = repository.db, resolve = media.resolveMediaLocationParams
+  const transaction = repository.db.transaction.bind(repository.db), db = repository.db
   const tables: Record<string, NativeTable> = {}
-  for (const name of ["conversations", "messages", "messageIds", "messageImages", "studioImageTurnMedia", "studioAudioTurnMedia"]) {
+  for (const name of names) {
     if (!isTable(db[name])) throw new Error(`Native Library table ${name} is unavailable.`)
     tables[name] = db[name]
   }
   return {
     tables,
-    location(conversationId, id, mimeType) {
-      const location: unknown = resolve({ conversationId, id, mimeType })
-      if (!isRecord(location) || typeof location.filePath !== "string" || typeof location.fileName !== "string") throw new Error("Invalid native media location.")
-      return `${location.filePath}/${location.fileName}`
-    },
+    location,
     async commit(conversation, message, projection) {
       await transaction("rw", [tables.conversations, tables.messages, tables.messageIds], async () => {
         await tables.conversations.add(conversation)
@@ -66,7 +74,7 @@ function portableMetadata(value: Record<string, unknown>): Record<string, unknow
     key.startsWith("_") || ["ownerId", "owner_id", "contentBinary", "veniceSyncLibrary"].includes(key) ? undefined : entry))
 }
 
-function descriptor(api: LibraryApi, source: LibraryAsset["source"], row: Record<string, unknown>): LibraryAsset {
+function descriptor(api: Pick<LibraryApi, "location">, source: LibraryAsset["source"], row: Record<string, unknown>): LibraryAsset {
   if (typeof row.id !== "string") throw new Error("Invalid Library asset identifier.")
   const data = isRecord(row.data) ? row.data : row
   const nativeFallback = source === "studio-audio" || row.modelType === "music" ? "audio/mpeg" :
@@ -98,25 +106,38 @@ function rows(values: unknown[]): Record<string, unknown>[] {
   return values.map((value) => { if (!isRecord(value)) throw new Error("Invalid native Library row."); return value })
 }
 
-export async function listLibraryAssets(): Promise<LibraryAsset[]> {
-  const owner = await waitForVeniceOwner(), api = await libraryApi()
-  const internalOwner = await currentMindOwner()
-  const collections = await getNativeCollections({ mindMedia: 6, discoverGenerations: 9 })
-  const conversations = rows(await api.tables.conversations.where("ownerId").equals(owner).toArray()).filter((row) => row.isTemporary !== true)
-  const ids = conversations.map((row) => String(row.id))
-  const chat = ids.length ? rows(await api.tables.messages.where("conversationId").anyOf(ids).toArray())
-    .filter((row) => row.role === "assistant" && !row.isPlaceholder && ["image", "enhance-image", "inpaint-image", "video", "music"].includes(String(row.modelType))) : []
-  const studioImages = rows(await api.tables.studioImageTurnMedia.where("ownerId").equals(owner).toArray()).filter((row) => row.mediaRole !== "input")
-  const studioAudio = rows(await api.tables.studioAudioTurnMedia.where("ownerId").equals(owner).toArray())
-  const mind = (await collections.mindMedia.find({ selector: { ownerId: internalOwner } }).exec()).map(documentData)
-    .filter((row) => isRecord(row.data) && ["generatedImage", "generatedVideo"].includes(String(row.data.mediaType)))
-  const discover = (await collections.discoverGenerations.find({ selector: { ownerId: internalOwner, status: "completed" } }).exec()).map(documentData)
-    .filter((row) => isRecord(row.data) && ["generatedImage", "generatedVideo"].includes(String(row.data.mediaType)))
-  const groups: [LibraryAsset["source"], Record<string, unknown>[]][] = [
-    ["chat", chat], ["studio-image", studioImages], ["studio-audio", studioAudio], ["mind", mind], ["discover", discover],
-  ]
+export async function listLibraryAssets(): Promise<LibraryAssets> {
+  const owner = await waitForVeniceOwner()
+  let internalOwner: Promise<string> | undefined
+  const sources: LibraryAsset["source"][] = ["chat", "studio-image", "studio-audio", "mind", "discover"]
+  const groups = await Promise.allSettled(sources.map(async (source) => {
+    let records: Record<string, unknown>[]
+    const location = await libraryLocation()
+    if (source === "mind" || source === "discover") {
+      internalOwner ??= currentMindOwner()
+      const name = source === "mind" ? "mindMedia" : "discoverGenerations"
+      const [collections, verifiedOwner] = await Promise.all([getNativeCollections({ [name]: source === "mind" ? 6 : [9, 10] }), internalOwner])
+      records = (await collections[name].find({ selector: { ownerId: verifiedOwner, ...(source === "discover" ? { status: "completed" } : {}) } }).exec()).map(documentData)
+        .filter((row) => isRecord(row.data) && ["generatedImage", "generatedVideo"].includes(String(row.data.mediaType)))
+    } else if (source === "chat") {
+      const api = await libraryApi(["conversations", "messages"])
+      const conversations = rows(await api.tables.conversations.where("ownerId").equals(owner).toArray()).filter((row) => row.isTemporary !== true)
+      const ids = conversations.map((row) => String(row.id))
+      records = ids.length ? rows(await api.tables.messages.where("conversationId").anyOf(ids).toArray())
+        .filter((row) => row.role === "assistant" && !row.isPlaceholder && ["image", "enhance-image", "inpaint-image", "video", "music"].includes(String(row.modelType))) : []
+    } else {
+      const name = source === "studio-image" ? "studioImageTurnMedia" : "studioAudioTurnMedia", api = await libraryApi([name])
+      records = rows(await api.tables[name].where("ownerId").equals(owner).toArray()).filter((row) => source !== "studio-image" || row.mediaRole !== "input")
+    }
+    return records.map((row) => descriptor({ location }, source, row))
+  }))
   if (currentVeniceOwner() !== owner) throw new Error("The account changed while reading Library assets.")
-  return groups.flatMap(([source, records]) => records.map((row) => descriptor(api, source, row))).sort((a, b) => b.createdAt - a.createdAt)
+  const assets: LibraryAsset[] = [], errors: LibrarySourceError[] = []
+  groups.forEach((group, index) => {
+    if (group.status === "fulfilled") assets.push(...group.value)
+    else errors.push({ source: sources[index], message: group.reason instanceof Error ? group.reason.message : String(group.reason) })
+  })
+  return { assets: assets.sort((a, b) => b.createdAt - a.createdAt), errors }
 }
 
 export async function readLibraryAsset(asset: LibraryAsset, files: LibraryFiles = browserLibraryFiles()): Promise<Blob> {
@@ -125,7 +146,7 @@ export async function readLibraryAsset(asset: LibraryAsset, files: LibraryFiles 
   try { blob = await files.read(asset.path) }
   catch (error) {
     if (asset.source !== "chat" || asset.kind !== "image") throw new Error("The referenced Library original is missing or unreadable. No incomplete export was created.", { cause: error })
-    const api = await libraryApi(), legacy = await api.tables.messageImages.get(asset.id)
+    const api = await libraryApi(["messageImages"]), legacy = await api.tables.messageImages.get(asset.id)
     const binary = isRecord(legacy) ? legacy.contentBinary : undefined
     if (ArrayBuffer.isView(binary)) blob = new Blob([Uint8Array.from(new Uint8Array(binary.buffer, binary.byteOffset, binary.byteLength)).buffer])
     else if (isArrayBuffer(binary)) blob = new Blob([binary])
@@ -137,11 +158,18 @@ export async function readLibraryAsset(asset: LibraryAsset, files: LibraryFiles 
 function isArrayBuffer(value: unknown): value is ArrayBuffer { return Object.prototype.toString.call(value) === "[object ArrayBuffer]" }
 
 export async function exportLibraryAsset(key: string, files: LibraryFiles = browserLibraryFiles()): Promise<LibraryPackage> {
-  const asset = (await listLibraryAssets()).find((entry) => entry.key === key)
-  if (!asset) throw new Error("This Library asset is no longer available to the current account.")
+  const find = async () => {
+    const result = await listLibraryAssets(), asset = result.assets.find((entry) => entry.key === key)
+    if (!asset) {
+      const error = result.errors.find((entry) => entry.source === key.split(":")[0])
+      throw new Error(error ? `Library source ${error.source} is unavailable: ${error.message}` : "This Library asset is no longer available to the current account.")
+    }
+    return asset
+  }
+  const asset = await find()
   const blob = await readLibraryAsset(asset, files), bytes = new Uint8Array(await blob.arrayBuffer())
-  const current = (await listLibraryAssets()).find((entry) => entry.key === key)
-  if (!current || JSON.stringify(current.metadata) !== JSON.stringify(asset.metadata) || current.path !== asset.path) throw new Error("Library metadata changed during export. Retry after editing finishes.")
+  const current = await find()
+  if (JSON.stringify(current.metadata) !== JSON.stringify(asset.metadata) || current.path !== asset.path) throw new Error("Library metadata changed during export. Retry after editing finishes.")
   return validateLibraryPackage({
     manifest: { format: "venice-sync-library-asset", version: 1, exportedAt: new Date().toISOString(),
       asset: { filename: asset.filename, kind: asset.kind, mimeType: asset.mimeType, bytes: bytes.length, sha256: await sha256(bytes),
@@ -151,7 +179,7 @@ export async function exportLibraryAsset(key: string, files: LibraryFiles = brow
 }
 
 export async function importLibraryAsset(input: LibraryPackage, files: LibraryFiles = browserLibraryFiles()): Promise<string> {
-  const pkg = await validateLibraryPackage(input), owner = await waitForVeniceOwner(), api = await libraryApi()
+  const pkg = await validateLibraryPackage(input), owner = await waitForVeniceOwner(), api = await libraryApi(["conversations", "messages", "messageIds"])
   const id = crypto.randomUUID(), conversationId = crypto.randomUUID()
   if (id === conversationId || await api.tables.messages.get(id) || await api.tables.messageIds.get(id) ||
       await api.tables.conversations.get(conversationId) || await files.containerExists(conversationId)) throw new Error("Generated Library identifiers/namespace already exist. Nothing was overwritten.")

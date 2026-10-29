@@ -47,7 +47,7 @@ beforeEach(() => {
   vi.mocked(listMindHistory).mockResolvedValue({ conversations: [], targets: [] })
   vi.mocked(listMindDefinitions).mockResolvedValue([])
   vi.mocked(listCharacters).mockResolvedValue([])
-  vi.mocked(listLibraryAssets).mockResolvedValue([])
+  vi.mocked(listLibraryAssets).mockResolvedValue({ assets: [], errors: [] })
   vi.mocked(listStudioSessions).mockResolvedValue([])
   vi.mocked(readStorageOverview).mockResolvedValue({
     origin: "https://venice.ai", readAt: "2026-10-27T05:00:00Z",

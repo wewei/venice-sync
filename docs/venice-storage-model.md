@@ -97,6 +97,7 @@ owner”来猜测。当前实现通过原生 Clerk session getter 获取临时�
 | RxDB `mindMessages` | 逻辑 collection schema version | `25` |
 | RxDB `mindAttachments` | 逻辑 collection schema version | `0` |
 | RxDB `mindMedia` | 逻辑 collection schema version | `6` |
+| RxDB `discoverGenerations` | 逻辑 collection schema version | `9` 或 `10`（仅完成产物的 Library 导出） |
 
 不要把 IndexedDB 版本、Dexie 版本和 RxDB collection 版本相互比较。
 例如，Dexie `31` 与其 IndexedDB `310` 是同一原生 repository 的不同表示；
@@ -415,7 +416,7 @@ OPFS:
 | Studio 图像 | Dexie `studioImageTurnMedia`，Clerk ownerId，排除 `mediaRole=input` | `media/{sessionId}/{id}.{ext}` |
 | Studio 音频 | Dexie `studioAudioTurnMedia`，Clerk ownerId | `media/{sessionId}/{id}.{ext}` |
 | Mind 生成媒体 | RxDB `mindMedia` v6，Venice 内部 ownerId，generatedImage/generatedVideo | `media/{mindConversationId}/{id}.{ext}` |
-| Discover 生成媒体 | RxDB `discoverGenerations` v9，内部 ownerId，completed 且为生成图片/视频 | `discover/generations/{id}.{ext}` |
+| Discover 生成媒体 | RxDB `discoverGenerations` v9/v10，内部 ownerId，completed 且为生成图片/视频 | `discover/generations/{id}.{ext}` |
 
 扩展名由原生 `resolveMediaLocationParams` 计算，不能简单对 MIME 截取。
 Dexie `messages` 没有 ownerId 索引，应从所属会话关联查询。
@@ -423,6 +424,24 @@ Dexie `messages` 没有 ownerId 索引，应从所属会话关联查询。
 缺失 MIME 时遵循原生图像 WebP、视频 MP4、音乐 MPEG 的回退类型；
 明确不支持的 MIME 单独报错，不能让一项隐藏整个有效列表。
 原生网页还会按用户设置筛选内容；存储资产列表不保证与其显示数量相等。
+
+2026-10-29 补充：运行中的 Discover collection 已为 v10。对比此前保留的
+v9 原生 schema 字面量与当前 v10，除 version 外，变化仅为三种 `inputs`
+分支增加可选 string `slotId`；`data`、必填字段和索引均未变化。
+原生 `migrationStrategies[10]` 为恒等函数。当前 schema 的 `data` 仍以
+`generatedImage|generatedVideo` 区分完成产物，保留 `mimeType`、尺寸、
+模型及视频 `queueId` 等字段；`inputs` 是 chat/mind/discover/userMedia 的
+引用描述，`job/failure` 则为任务状态（`job.hasTrendAudio` 还可关联辅助音轨）。
+单资产 ZIP 保留来源元信息，但不承诺迁移这些输入/任务关联。
+原生 `getDiscoverGenerationMedia` 使用 `discover/{kind}/{id}.{nativeExtension}`，
+Library 原件取 `kind=generations`，不包括 thumbnails/trendAudio 辅助文件。
+当前源账户 Discover 为 0 条，v10 真实产物文件的往返尚无样本；
+兼容依据为实际 schema、原生恒等迁移和完成产物读取/定位逻辑，并有合成路径回归。
+
+Library 的五个来源独立读取并返回 `{ assets, errors }`。
+Dexie 表缺失、一个 RxDB collection 不兼容、内部 owner 查询失败等只影响相应来源，
+界面按来源显示错误，不把失败说成空账户。各来源仍保留原来的版本/归属检查，
+账户切换会使整个读取失败；从失败来源导出也明确失败，绝不生成部分成功包。
 
 Studio 图像记录包含 sessionId、turnId、模型、prompt/imageSettings、
 mediaRole、增强提示词等来源信息。不能由这些记录推导出完整项目迁移。
@@ -482,6 +501,16 @@ Library 的单资产传输保持不变；另一个入口 **Library Assets > Stud
 输出 `mediaRole=output`，输入 `mediaRole=input`。图片文件在
 `media/{sessionId}/{mediaId}.{ext}`，可重建的原生 Studio 缩略图为
 `thumbnails/{sessionId}_{mediaId}_thumb.jpg`，不等同于单资产导入的 `_thumb500.jpg`。
+
+2026-10-29 实际解密行补充：背景移除历史的 turn `mode=remove`
+对应输出 `source=remove-bg`，不是未知升级字段；普通编辑为 `mode=edit`。
+生成设置还包含 `loraStrength`、`hideWatermark`，以及可选的
+`quality/resolution/enableWebSearch/disablePromptOptimizationThinking/transparentBackground/suggestedModel`。
+原生 producer 会创建值为 `undefined` 的可选属性（包括媒体
+`inputGroupId/isUserUploaded`）；已知的这种“未设置”状态在 JSON 中表现为属性缺席，
+不等于任意未知属性都可丢弃。未知属性即使值为 undefined 也拒绝。
+有值的分组/上传输入元信息，以及 `maskMedia/doodleMedia` 等 overlay 引用仍拒绝，
+不能仅放开字段名而漏带文件或保留源 ID。
 
 音频会话 `type=audio-generate`，`selectedAudioId` 指向音频媒体。
 Turn 保留 `prompt/effectivePrompt/lyricsPrompt/settings`，

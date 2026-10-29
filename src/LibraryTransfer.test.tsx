@@ -18,7 +18,7 @@ const pkg: LibraryPackage = {
   bytes: new Uint8Array([1, 2, 3]),
 }
 beforeEach(() => {
-  vi.mocked(listLibraryAssets).mockResolvedValue([])
+  vi.mocked(listLibraryAssets).mockResolvedValue({ assets: [], errors: [] })
   vi.mocked(decodeLibraryPackage).mockResolvedValue(pkg)
 })
 afterEach(() => { cleanup(); vi.resetAllMocks() })
@@ -28,6 +28,12 @@ function archive() {
   return file
 }
 describe("Library asset WebUI", () => {
+  it("shows each failed source explicitly without claiming the account Library is empty", async () => {
+    vi.mocked(listLibraryAssets).mockResolvedValue({ assets: [], errors: [{ source: "discover", message: "Unsupported schema 11" }] })
+    render(<LibraryTransfer reloadPage={reloadPage} />)
+    expect(await screen.findByRole("alert")).toHaveTextContent("Discover unavailable: Unsupported schema 11")
+    expect(screen.queryByText("No generated Library assets in this account.")).not.toBeInTheDocument()
+  })
   it("previews checksummed archives before creating an independent media container", async () => {
     const user = userEvent.setup()
     vi.mocked(importLibraryAsset).mockResolvedValue("new-asset")
