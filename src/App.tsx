@@ -41,12 +41,14 @@ export function App({ runtime, portalContainer }: AppProps) {
       <DialogContent
         portalContainer={portalContainer}
         showCloseButton={!importing}
-        className="pointer-events-auto flex h-[min(54rem,calc(100dvh-2rem))] max-h-[calc(100dvh-2rem)] flex-col gap-6 overflow-hidden p-5 sm:max-w-[min(72rem,calc(100vw-4rem))] sm:p-7"
+        className="pointer-events-auto flex h-[min(54rem,calc(100dvh-2rem))] max-h-[calc(100dvh-2rem)] flex-col gap-6 overflow-hidden p-5 [&>[data-slot=dialog-close]]:size-11 sm:max-w-[min(72rem,calc(100vw-4rem))] sm:p-7"
         onFocusOutside={(event) => event.preventDefault()}
         onPointerDownOutside={(event) => {
           if (importing || (launcher.current && event.detail.originalEvent.composedPath().includes(launcher.current))) event.preventDefault()
         }}
-        onEscapeKeyDown={(event) => { if (importing) event.preventDefault() }}
+        onEscapeKeyDown={(event) => {
+          if (importing || panel.current?.querySelector('[data-testid="batch-basket-overlay"]:not([hidden])')) event.preventDefault()
+        }}
         onOpenAutoFocus={(event) => {
           event.preventDefault()
           panel.current?.querySelector<HTMLButtonElement>('[aria-current="page"]')?.focus()
@@ -57,14 +59,14 @@ export function App({ runtime, portalContainer }: AppProps) {
           else if (returnFocus.current?.isConnected) returnFocus.current.focus()
         }}
       >
-        <DialogHeader className="shrink-0 pr-8">
-          <DialogTitle>Venice Sync</DialogTitle>
-          <DialogDescription>
-            Download and upload your local Venice content. No cloud synchronization.
-          </DialogDescription>
-        </DialogHeader>
         <div ref={panel} className="flex min-h-0 flex-1">
           <SyncPanel
+            header={<DialogHeader>
+              <DialogTitle>Venice Sync</DialogTitle>
+              <DialogDescription>
+                Download and upload your local Venice content. No cloud synchronization.
+              </DialogDescription>
+            </DialogHeader>}
             runtime={runtime}
             clicks={clicks}
             onTestInteraction={() => setClicks((value) => value + 1)}

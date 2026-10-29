@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import {
   IconArrowDown, IconArrowUp, IconHome, IconInfoCircle,
 } from "@tabler/icons-react"
@@ -37,6 +37,7 @@ interface SyncPanelProps {
   onTestInteraction: () => void
   reloadPage: () => void
   onImportingChange?: (busy: boolean) => void
+  header?: ReactNode
 }
 
 function TransferDirections({ ready, mind = false, characters = false, library = false }: { ready: boolean; mind?: boolean; characters?: boolean; library?: boolean }) {
@@ -86,7 +87,7 @@ function DetailsPage({ runtime, clicks, onTestInteraction }: Omit<SyncPanelProps
   )
 }
 
-export function SyncPanel({ runtime, clicks, onTestInteraction, reloadPage, onImportingChange }: SyncPanelProps) {
+export function SyncPanel({ runtime, clicks, onTestInteraction, reloadPage, onImportingChange, header }: SyncPanelProps) {
   const [page, setPage] = useState<Page>("overview")
   const [conversationsOpened, setConversationsOpened] = useState(false)
   const [mindOpened, setMindOpened] = useState(false)
@@ -112,10 +113,10 @@ export function SyncPanel({ runtime, clicks, onTestInteraction, reloadPage, onIm
   ] as const
 
   return (
-    <BatchBasket reloadPage={reloadPage} onImportingChange={onImportingChange}><div data-testid="sync-panel" className="flex min-h-0 min-w-0 flex-1 flex-col gap-6 sm:flex-row">
+    <BatchBasket header={header} reloadPage={reloadPage} onImportingChange={onImportingChange}><div data-testid="sync-panel" className="flex min-h-0 min-w-0 flex-1 flex-col gap-6 sm:flex-row">
       <nav ref={navigation} aria-label="Sync pages" className="grid shrink-0 grid-cols-2 gap-1 border-b pb-3 sm:flex sm:w-48 sm:flex-col sm:border-r sm:border-b-0 sm:pr-4 sm:pb-0">
         {links.map(({ id, title, Icon }) => (
-          <Button key={id} variant={page === id ? "secondary" : "ghost"} className="h-10 min-w-0 justify-start gap-3" aria-current={page === id ? "page" : undefined} onClick={() => navigate(id)}>
+          <Button key={id} variant={page === id ? "secondary" : "ghost"} className="h-11 min-w-0 justify-start gap-3 sm:h-10" aria-current={page === id ? "page" : undefined} onClick={() => navigate(id)}>
             <Icon aria-hidden="true" /><span className="truncate">{title}</span>
           </Button>
         ))}

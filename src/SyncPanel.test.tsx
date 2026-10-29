@@ -179,6 +179,15 @@ describe("transfer-focused WebUI", () => {
     expect(screen.getByTestId("import-preview")).not.toBeVisible()
     await navigate("Conversations")
     expect(screen.getByTestId("import-preview")).toBeVisible()
+    const preview = screen.getByTestId("import-preview")
+    const content = screen.getByTestId("sync-panel").lastElementChild!
+    content.scrollTop = 137
+    await userEvent.click(screen.getByRole("button", { name: "Export basket (0)" }))
+    await userEvent.click(screen.getByRole("button", { name: "Import from backup" }))
+    await userEvent.click(screen.getByRole("button", { name: "Back to content" }))
+    expect(screen.getByTestId("import-preview")).toBe(preview)
+    expect(preview).toBeVisible()
+    expect(content.scrollTop).toBe(137)
     expect(listClassicConversations).toHaveBeenCalledOnce()
     expect(props.reloadPage).not.toHaveBeenCalled()
   })

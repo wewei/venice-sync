@@ -1,5 +1,5 @@
-import { useContext, useEffect, useRef, useState, type ReactNode } from "react"
-import { IconBasketPlus, IconCheck, IconDownload, IconFolderOpen, IconX } from "@tabler/icons-react"
+import { useContext, useEffect, useId, useRef, useState, type ReactNode } from "react"
+import { IconArrowLeft, IconBasket, IconBasketPlus, IconCheck, IconDownload, IconFolderOpen, IconX } from "@tabler/icons-react"
 import { Button } from "@/components/ui/button"
 import { IconAction } from "./components/IconAction"
 import { BatchContext } from "./batch-context"
@@ -32,16 +32,54 @@ export function BasketAddAll({ items, label, disabled = false }: { items: BatchS
   </Button>
 }
 
-export function BatchBasket({ children, reloadPage, onImportingChange }: {
-  children: ReactNode; reloadPage?: () => void; onImportingChange?: (busy: boolean) => void
+export function BatchBasket({ children, header, reloadPage, onImportingChange }: {
+  children: ReactNode; header?: ReactNode; reloadPage?: () => void; onImportingChange?: (busy: boolean) => void
 }) {
   const [items, setItems] = useState<BatchSelection[]>([])
   const [busy, setBusy] = useState(false), [expanded, setExpanded] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [view, setView] = useState<"export" | "import">("export")
+  const [importing, setImporting] = useState(false)
   const [error, setError] = useState<string>(), [notice, setNotice] = useState<string>()
   const [progress, setProgress] = useState(0), [archive, setArchive] = useState<BatchPackage>()
   const controller = useRef<AbortController | undefined>(undefined), active = useRef(true)
   const fileInput = useRef<HTMLInputElement>(null)
+  const shell = useRef<HTMLDivElement>(null), drawer = useRef<HTMLElement>(null)
+  const trigger = useRef<HTMLButtonElement>(null), back = useRef<HTMLButtonElement>(null)
+  const drawerId = useId(), titleId = useId()
+  useEffect(() => {
+    onImportingChange?.(importing)
+    return () => onImportingChange?.(false)
+  }, [importing, onImportingChange])
+  useEffect(() => {
+    if (!expanded) return
+    back.current?.focus()
+    const element = shell.current
+    const returnTarget = trigger.current
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault(); event.stopPropagation(); setExpanded(false)
+      } else if (event.key === "Tab") {
+        const buttons = [...(drawer.current?.querySelectorAll<HTMLElement>('button, input, select, textarea, summary, a[href], [tabindex]') ?? [])]
+          .filter(node => node.tabIndex >= 0 && !node.matches(":disabled") && !node.closest("[hidden], [inert]"))
+          .filter(node => !node.closest("details:not([open])") || node.matches("summary"))
+        const current = buttons.findIndex(node => event.composedPath().includes(node))
+        const next = event.shiftKey ? (current <= 0 ? buttons.length - 1 : current - 1) : (current + 1) % buttons.length
+        event.preventDefault()
+        buttons[next]?.focus()
+      }
+    }
+    const onFocusIn = (event: FocusEvent) => {
+      if (drawer.current && !event.composedPath().includes(drawer.current)) back.current?.focus({ preventScroll: true })
+    }
+    element?.ownerDocument.addEventListener("keydown", onKeyDown, true)
+    element?.ownerDocument.addEventListener("focusin", onFocusIn, true)
+    return () => {
+      element?.ownerDocument.removeEventListener("keydown", onKeyDown, true)
+      element?.ownerDocument.removeEventListener("focusin", onFocusIn, true)
+      if (returnTarget?.isConnected) returnTarget.focus({ preventScroll: true })
+    }
+  }, [expanded])
   useEffect(() => {
     active.current = true
     return () => { active.current = false; controller.current?.abort() }
@@ -50,7 +88,7 @@ export function BatchBasket({ children, reloadPage, onImportingChange }: {
   function add(incoming: BatchSelection[]) {
     const merged = new Map(items.map(item => [batchKey(item), item]))
     incoming.forEach(item => merged.set(batchKey(item), item))
-    if (merged.size > MAX_BATCH_ITEMS) { setError("The export basket allows at most 200 items. Add a smaller selection."); return }
+    if (merged.size > MAX_BATCH_ITEMS) { setError("The export basket allows at most 200 items. Add a smaller selection."); setView("export"); setExpanded(true); return }
     setItems([...merged.values()]); setError(undefined)
   }
   async function download() {
@@ -78,47 +116,79 @@ export function BatchBasket({ children, reloadPage, onImportingChange }: {
       if (file.size > MAX_BATCH_BYTES) throw new Error("Batch ZIP exceeds 128 MiB.")
       const pkg = await decodeBatch(new Uint8Array(await file.arrayBuffer()))
       await validateBatchContents(pkg)
-      if (active.current) { setArchive(pkg); setExpanded(true); setNotice("Batch verified. Take out individual files and use the existing import previews; opening a batch writes nothing.") }
+      if (active.current) { setArchive(pkg); setNotice("Batch verified. Select items to review and import, or take out original files. Opening a batch writes nothing.") }
     } catch (reason) { if (active.current) setError(reason instanceof Error ? reason.message : String(reason)) }
     finally { if (active.current) setBusy(false) }
   }
   return <BatchContext.Provider value={{ items, busy, add, remove }}>
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4">
-      <section aria-label="Export basket" className="grid shrink-0 gap-2 rounded-lg border p-3 text-sm">
-        <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="outline" aria-expanded={expanded} disabled={busy} onClick={() => setExpanded(value => !value)}>Export basket ({items.length})</Button>
-          <IconAction label="Download export basket" disabled={busy || !items.length} onClick={() => void download()}><IconDownload aria-hidden="true" /></IconAction>
-          <IconAction label="Open batch archive" disabled={busy} onClick={() => fileInput.current?.click()}><IconFolderOpen aria-hidden="true" /></IconAction>
-          {busy && exporting && <Button size="sm" variant="outline" onClick={() => controller.current?.abort()}>Cancel batch export</Button>}
-          {busy && <span role="status">{exporting ? `Preparing ${progress}/${items.length} items...` : "Verifying batch archive..."}</span>}
+    <div ref={shell} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+      <div inert={expanded} className="flex min-h-0 min-w-0 flex-1 flex-col gap-5">
+        <div className="flex shrink-0 items-start justify-between gap-2 pr-9">
+          <div className="min-w-0">{header ?? <h2 className="font-medium">Venice Sync</h2>}</div>
+          <IconAction ref={trigger} label={`Export basket (${items.length})`} aria-haspopup="dialog" aria-controls={drawerId} aria-expanded={expanded}
+            className="relative size-11 shrink-0" onClick={() => setExpanded(true)}>
+            <IconBasket aria-hidden="true" />
+            <span aria-hidden="true" className="absolute top-0 right-0 min-w-5 rounded-full bg-secondary px-1 text-[0.65rem] font-medium">{items.length}</span>
+          </IconAction>
         </div>
-        <input ref={fileInput} type="file" accept=".zip" aria-label="Open batch ZIP" className="sr-only" disabled={busy}
-          onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void openArchive(file) }} />
-        {error && <p role="alert">{error}</p>}
-        {notice && <p role="status">{notice}</p>}
-        {expanded && <div className="grid max-h-52 gap-3 overflow-y-auto" data-testid="batch-basket-details">
-          <p className="text-xs text-muted-foreground">Add items from any content page. Minds include all saved package content; selecting chats does not automatically include their Mind definitions. Export is a sequence of reads, not an atomic account snapshot. Limits: 200 items, 4096 files, 128 MiB logical/expanded/ZIP. Close the panel to discard the basket.</p>
-          {!!items.length && <Button size="sm" variant="ghost" className="w-fit" disabled={busy} onClick={() => setItems([])}>Clear export basket</Button>}
-          {items.map(item => <div key={batchKey(item)} className="flex min-w-0 items-center gap-2" data-basket-item={batchKey(item)}>
-            <span className="min-w-0 flex-1 truncate" title={item.title}>{item.kind} · {item.title}</span>
-            <IconAction label={`Remove basket item: ${item.title}`} disabled={busy} onClick={() => remove(item)}><IconX aria-hidden="true" /></IconAction>
-          </div>)}
-          {archive && <section aria-label="Opened batch contents" className="grid gap-2">
-            <h3 className="font-medium">Take items out of this batch ({archive.manifest.items.length})</h3>
-            <p className="text-xs text-muted-foreground">Take out an original-format file, or select items below to review and import new copies. Opening the batch itself writes nothing.</p>
-            <Button size="sm" variant="ghost" className="w-fit" disabled={busy} onClick={() => setArchive(undefined)}>Close opened batch</Button>
-            {archive.manifest.items.map(item => <div key={batchKey(item)} className="flex min-w-0 items-center gap-2">
-              <span className="min-w-0 flex-1 truncate" title={item.title}>{item.kind} · {item.title}</span>
-              <IconAction label={`Take out item: ${item.title}`} disabled={busy} onClick={() => {
-                try { downloadBytes(reconstructBatchItem(archive, item), item.filename, item.packaging === "json" ? "application/json" : "application/zip") }
-                catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
-              }}><IconDownload aria-hidden="true" /></IconAction>
-            </div>)}
-            {reloadPage && <BatchImportPanel archive={archive} busy={busy} onBusyChange={setBusy} onImportingChange={onImportingChange} reloadPage={reloadPage} />}
-          </section>}
-        </div>}
-      </section>
-      <fieldset disabled={busy} className="flex min-h-0 min-w-0 flex-1 border-0 p-0">{children}</fieldset>
+        {busy && <p role="status" className="sr-only">{importing ? "Batch import running. Open the basket to review progress." : "Batch operation running. Open the basket to review progress."}</p>}
+        <fieldset disabled={busy} className="flex min-h-0 min-w-0 flex-1 border-0 p-0">{children}</fieldset>
+      </div>
+      <div hidden={!expanded} className="absolute inset-0 z-10 overflow-hidden rounded-lg" data-testid="batch-basket-overlay">
+        <div aria-hidden="true" className="absolute inset-0 bg-black/10" onClick={() => setExpanded(false)} />
+        <section ref={drawer} id={drawerId} role="dialog" aria-modal="true" aria-labelledby={titleId}
+          className="absolute inset-y-0 right-0 flex w-full min-w-0 flex-col border-l bg-popover text-sm shadow-lg [&_button]:min-h-11 [&_button]:whitespace-normal [&_button[data-size=icon]]:min-w-11 sm:max-w-md">
+          <div className="flex shrink-0 items-center gap-2 border-b p-2">
+            <IconAction ref={back} label="Back to content" className="size-11 shrink-0" onClick={() => setExpanded(false)}><IconArrowLeft aria-hidden="true" /></IconAction>
+            <h2 id={titleId} className="font-medium">Content basket</h2>
+            {importing && <span role="status" className="ml-auto text-xs">Import running</span>}
+          </div>
+          <div role="group" aria-label="Basket views" className="grid shrink-0 grid-cols-2 gap-1 border-b p-2">
+            <Button className="h-auto min-h-11 whitespace-normal" variant={view === "export" ? "secondary" : "ghost"} aria-pressed={view === "export"} onClick={() => setView("export")}>To export ({items.length})</Button>
+            <Button className="h-auto min-h-11 whitespace-normal" variant={view === "import" ? "secondary" : "ghost"} aria-pressed={view === "import"} onClick={() => setView("import")}>Import from backup</Button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 [overflow-wrap:anywhere]">
+            {error && <p role="alert">{error}</p>}
+            {notice && <p role="status">{notice}</p>}
+            <section hidden={view !== "export"} aria-label="Export basket" className="grid gap-3" data-testid="batch-basket-details">
+              <div className="flex flex-wrap items-center gap-2">
+                <IconAction label="Download export basket" disabled={busy || !items.length} onClick={() => void download()}><IconDownload aria-hidden="true" /></IconAction>
+                {busy && exporting && <Button size="sm" variant="outline" onClick={() => controller.current?.abort()}>Cancel batch export</Button>}
+                {exporting && <span role="status">{`Preparing ${progress}/${items.length} items...`}</span>}
+              </div>
+              <p className="text-xs text-muted-foreground">Add items from any content page. Minds include all saved package content; selecting chats does not automatically include their Mind definitions. Export is a sequence of reads, not an atomic account snapshot. Limits: 200 items, 4096 files, 128 MiB logical/expanded/ZIP. Closing Sync discards the basket; Back keeps your page and selections.</p>
+              {!items.length && <p className="text-muted-foreground">Your export basket is empty. Add items from the content pages.</p>}
+              {!!items.length && <Button size="sm" variant="ghost" className="w-fit" disabled={busy} onClick={() => setItems([])}>Clear export basket</Button>}
+              {items.map(item => <div key={batchKey(item)} className="flex min-w-0 items-center gap-2" data-basket-item={batchKey(item)}>
+                <span className="min-w-0 flex-1 truncate" title={item.title}>{item.kind} · {item.title}</span>
+                <IconAction label={`Remove basket item: ${item.title}`} disabled={busy} onClick={() => remove(item)}><IconX aria-hidden="true" /></IconAction>
+              </div>)}
+            </section>
+            <section hidden={view !== "import"} aria-label="Import from backup" className="grid gap-3">
+              <p className="text-xs text-muted-foreground">Open and validate a backup read-only, then select and review items before explicitly confirming new copies. This list is separate from your export basket.</p>
+              <Button variant="outline" disabled={busy} onClick={() => fileInput.current?.click()}><IconFolderOpen aria-hidden="true" />Open batch archive</Button>
+              {busy && !exporting && !importing && <p role="status">Verifying batch archive...</p>}
+              <input ref={fileInput} type="file" accept=".zip" aria-label="Open batch ZIP" className="sr-only" tabIndex={-1} disabled={busy}
+                onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void openArchive(file) }} />
+              {archive && <section aria-label="Opened batch contents" className="grid gap-2">
+                <h3 className="font-medium">Verified backup ({archive.manifest.items.length} items)</h3>
+                <Button size="sm" variant="ghost" className="w-fit" disabled={busy} onClick={() => setArchive(undefined)}>Close opened batch</Button>
+                <details>
+                  <summary className="min-h-11 cursor-pointer py-3">Take out original files</summary>
+                  {archive.manifest.items.map(item => <div key={batchKey(item)} className="flex min-w-0 items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate" title={item.title}>{item.kind} · {item.title}</span>
+                    <IconAction label={`Take out item: ${item.title}`} disabled={busy} onClick={() => {
+                      try { downloadBytes(reconstructBatchItem(archive, item), item.filename, item.packaging === "json" ? "application/json" : "application/zip") }
+                      catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
+                    }}><IconDownload aria-hidden="true" /></IconAction>
+                  </div>)}
+                </details>
+                {reloadPage && <BatchImportPanel archive={archive} busy={busy} onBusyChange={setBusy} onImportingChange={setImporting} reloadPage={reloadPage} />}
+              </section>}
+            </section>
+          </div>
+        </section>
+      </div>
     </div>
   </BatchContext.Provider>
 }

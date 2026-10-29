@@ -61,7 +61,7 @@ export function BatchImportPanel({ archive, busy, onBusyChange, onImportingChang
     </div>
     {archive.manifest.items.map(item => {
       const key = batchKey(item)
-      return <label key={key} data-batch-import-key={key} className="flex min-w-0 items-center gap-2">
+      return <label key={key} data-batch-import-key={key} className="flex min-h-11 min-w-0 cursor-pointer items-center gap-2">
         <input type="checkbox" aria-label={`Import batch item: ${item.title}`} disabled={busy || attempted.has(key)} checked={selected.includes(key)}
           onChange={event => changeSelection(event.currentTarget.checked ? [...selected, key] : selected.filter(value => value !== key))} />
         <span className="min-w-0 truncate" title={item.title}>{item.kind} · {item.title}{attempted.has(key) ? " · Already attempted; see results" : ""}</span>
@@ -75,7 +75,7 @@ export function BatchImportPanel({ archive, busy, onBusyChange, onImportingChang
         <span>{entry.item.kind} · {entry.item.title}</span>
         {entry.newMindKey && <span className="text-xs">Destination: the new copy of the selected Mind definition.</span>}
         {entry.content.kind === "mind-history" && !entry.newMindKey && <label>Destination Mind for {entry.item.title}
-          <select aria-label={`Destination Mind: ${entry.item.title}`} data-batch-destination-key={batchKey(entry.item)} className="w-full min-w-0 rounded border bg-background p-2" disabled={busy}
+          <select aria-label={`Destination Mind: ${entry.item.title}`} data-batch-destination-key={batchKey(entry.item)} className="min-h-11 w-full min-w-0 rounded border bg-background p-2" disabled={busy}
             value={destinations[batchKey(entry.item)] ?? ""} onChange={event => setDestinations(current => ({ ...current, [batchKey(entry.item)]: event.currentTarget.value }))}>
             <option value="">Select an existing Mind</option>
             {plan.targets.map(target => <option key={`${target.kind}:${target.id}`} value={`${target.kind}:${target.id}`}>{target.name} ({target.kind})</option>)}

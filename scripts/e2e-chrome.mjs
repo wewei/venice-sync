@@ -1728,8 +1728,10 @@ async function batchExportTest(context) {
     const mediaRefs = manifest.items.find(item => item.kind === "studio-image").files.filter(file => file.path.startsWith("media/"))
     assert.equal(mediaRefs.length, 2)
     assert.equal(mediaRefs[0].object, mediaRefs[1].object, "Identical originals were not deduplicated.")
+    await dialog.getByRole("button", { name: "Import from backup", exact: true }).click()
     await dialog.getByLabel("Open batch ZIP", { exact: true }).setInputFiles({ name: "batch.zip", mimeType: "application/zip", buffer: zip })
     await dialog.getByRole("region", { name: "Opened batch contents", exact: true }).waitFor()
+    await dialog.getByText("Take out original files", { exact: true }).click()
     const restoredJson = await download(() => dialog.getByRole("button", { name: `Take out item: ${fixture.conversation.name}`, exact: true }).click())
     const restored = JSON.parse(restoredJson.toString("utf8"))
     assert.equal(restored.conversation.id, first.id)
@@ -1740,6 +1742,7 @@ async function batchExportTest(context) {
     for (const file of restoredStudio.files) assert.deepEqual(Buffer.from(studio[file.path]), media.buffer)
     assert.deepEqual(await libraryTestState(page), before, "Batch preparation/open/extraction changed native storage.")
     assert.deepEqual((await studioTestState(page, studioName)).fingerprint, studioBefore)
+    await dialog.getByRole("button", { name: "Back to content", exact: true }).click()
     await dialog.getByLabel("Import conversation JSON", { exact: true }).setInputFiles({ name: "restored.json", mimeType: "application/json", buffer: restoredJson })
     await dialog.getByTestId("import-preview").waitFor()
     await dialog.getByRole("button", { name: "Cancel import", exact: true }).click()
@@ -1748,6 +1751,7 @@ async function batchExportTest(context) {
     await dialog.getByTestId("studio-import-preview").waitFor()
     await dialog.getByRole("button", { name: "Cancel Studio import", exact: true }).click()
     assert.deepEqual(await libraryTestState(page), before, "Standalone extracted-file previews changed storage.")
+    await dialog.getByRole("button", { name: "Export basket (2)", exact: true }).click()
     const imports = dialog.getByRole("region", { name: "Selected batch import", exact: true })
     await imports.getByRole("button", { name: "Select all unattempted items", exact: true }).click()
     await imports.getByRole("button", { name: "Review 2 selected imports", exact: true }).click()
@@ -1755,11 +1759,13 @@ async function batchExportTest(context) {
     assert.deepEqual(await libraryTestState(page), before, "Batch import review changed storage.")
     const originBeforeImport = await page.evaluate(() => performance.timeOrigin)
     await imports.getByRole("button", { name: "Confirm selected batch import", exact: true }).click()
+    await dialog.getByRole("button", { name: "Back to content", exact: true }).click()
     await page.waitForFunction(hostId => {
       const panel = document.getElementById(hostId)?.shadowRoot?.querySelector('[aria-label="Selected batch import"]')
       return panel?.querySelectorAll('[data-batch-result-status="success"]').length === 2 &&
         ![...panel.querySelectorAll("button")].some(button => button.textContent === "Stop after current item")
     }, hostId, { timeout: 60000 })
+    await dialog.getByRole("button", { name: "Export basket (2)", exact: true }).click()
     const results = await imports.locator("[data-batch-result-key]").evaluateAll(nodes => nodes.map(node => ({
       kind: JSON.parse(node.getAttribute("data-batch-result-key"))[0], id: node.getAttribute("data-batch-new-id"),
     })))
@@ -1770,16 +1776,19 @@ async function batchExportTest(context) {
     assert.equal((await studioTestState(page, studioName)).ids.length, 2)
     assert.ok(await imports.getByRole("button", { name: "Refresh Venice after reviewing results", exact: true }).isEnabled())
     const original = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))
-    await page.setViewportSize({ width: 390, height: 844 })
-    await dialog.evaluate(async element => { await Promise.all(element.getAnimations().map(animation => animation.finished)) })
-    assert.equal(await dialog.evaluate(element => element.scrollWidth > element.clientWidth), false)
-    await dialog.getByRole("region", { name: "Export basket", exact: true }).screenshot({ path: path.join(root, "test-results/batch-basket-mobile.png") })
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 844 })
+      await dialog.evaluate(async element => { await Promise.all(element.getAnimations().map(animation => animation.finished)) })
+      const basket = dialog.getByRole("dialog", { name: "Content basket", exact: true })
+      assert.equal(await basket.evaluate(element => element.scrollWidth > element.clientWidth || element.lastElementChild.scrollWidth > element.lastElementChild.clientWidth), false)
+      await basket.screenshot({ path: path.join(root, `test-results/batch-basket-mobile-${width}.png`) })
+    }
     await page.setViewportSize(original)
     assert.equal(requests.length, 0)
     return { mixedConversationAndStudioBasket: "passed", independentObjectsAndHashes: "matched", identicalOriginalsDeduplicated: "passed",
       reconstructedJsonAndStudioZip: "passed", existingImportPreviews: "passed", exportAndExtractionReadOnly: "passed",
       selectedBatchImportCreatesNewCopies: "passed", noIntermediateReload: "passed",
-      mobile390px: "passed", inferenceOrPublishRequests: 0, scriptEvaluatedByPlaywright: false }
+      collapsedImportRetainsResults: "passed", mobile320px: "passed", mobile390px: "passed", inferenceOrPublishRequests: 0, scriptEvaluatedByPlaywright: false }
   } catch (error) {
     console.error("Batch E2E failed before cleanup:", error)
     throw error

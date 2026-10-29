@@ -19,8 +19,15 @@ the entire currently loaded result, including rows behind **Show more**, not jus
 visible cards. Unavailable sources are not included; their existing errors remain
 visible. Opening a page is still lazy; this is not an implicit whole-account backup.
 
-Open **Export basket (N)** to review/remove entries or clear the basket, then use
-**Download export basket** to download one ZIP. Existing single-item downloads
+The compact **basket icon + count** sits to the right of the Sync panel title
+(accessible name: **Export basket (N)**). Open it to review/remove entries or clear
+the basket in **To export**, then use **Download export basket** to download one ZIP.
+On desktop the basket overlays the right side **inside Sync**, without a permanent
+third column or narrowing the content. On phones it fills the panel's inner view.
+**Back to content**, Escape or the low-emphasis panel-local backdrop returns to
+the unchanged content page, preview, scroll position and selections. Keyboard
+focus stays in the basket while open and returns to its icon on dismissal.
+Closing Sync itself still discards the basket. Existing single-item downloads
 remain available. Selecting a Mind chooses the entire definition/resources/saved
 Builder/Preview package, not parts of it. Mind chat histories remain separate
 items and do not automatically add the Mind definition. Existing per-type support
@@ -38,10 +45,13 @@ are **not an atomic multi-item account snapshot**.
 
 ### Opening a batch and taking items out
 
-Use **Open batch archive** in the basket toolbar. The whole package's paths,
+Open the basket's separate **Import from backup** view, then **Open batch archive**.
+Local export selections never mix with the opened archive's items.
+The whole package's paths,
 limits, hashes and original single-item formats are validated before showing its
 contents. This is read-only and can be used without signing in to an exporting
-account. Click **Take out item** to reconstruct one original-format JSON or ZIP;
+account. Expand **Take out original files** and click **Take out item** to
+reconstruct one original-format JSON or ZIP;
 select that file on its existing import page to preview and confirm a new copy.
 JSON whitespace/key ordering and ZIP entry timestamps may differ, but original
 media bytes and portable record content are preserved. Nothing is imported,
@@ -71,7 +81,11 @@ Remaining unattempted items can be reviewed in a new selection.
 
 Keep the browser tab open during writes. Sync prevents its own dialog from
 closing during the running import, but cannot protect against closing the tab,
-browser shutdown or a crash. There is no automatic page reload during a batch.
+browser shutdown or a crash. You may switch basket views or use **Back to content**
+while importing: this only hides the view, never cancels/unmounts the queue or
+discards its results. Reopen **Import from backup** to review them or stop after
+the current item. Sync itself remains locked against close, Escape and outside
+dismissal until the write finishes. There is no automatic page reload during a batch.
 After reviewing the results, use **Refresh Venice after reviewing results**
 once if any successful importer needs the native caches refreshed. A failed
 refresh is reported as an already-completed import, not an invitation to duplicate
