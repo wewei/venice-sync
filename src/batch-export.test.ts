@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { readFileSync } from "node:fs"
+import path from "node:path"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { strFromU8 } from "fflate"
 import { currentVeniceOwner, waitForVeniceOwner, exportClassicConversation } from "./venice-classic"
@@ -26,17 +27,18 @@ vi.mock("./venice-characters", () => ({ exportCharacter: vi.fn() }))
 vi.mock("./venice-library", () => ({ exportLibraryAsset: vi.fn() }))
 vi.mock("./venice-studio", () => ({ exportStudioSession: vi.fn() }))
 const selection = (kind: BatchSelection["kind"]): BatchSelection => ({ kind, id: kind, title: `${kind} fixture` })
+const fixtureText = (name: string) => readFileSync(path.join("scripts", "fixtures", `${name}.json`), "utf8")
 beforeEach(async () => {
   vi.resetAllMocks()
   vi.mocked(currentVeniceOwner).mockReturnValue("owner")
   vi.mocked(waitForVeniceOwner).mockResolvedValue("owner")
-  vi.mocked(exportClassicConversation).mockResolvedValue(parseConversationFile(readFileSync("scripts\\fixtures\\classic-conversation.json", "utf8")))
-  const mind = parseMindConversation(readFileSync("scripts\\fixtures\\mind-conversation.json", "utf8"))
+  vi.mocked(exportClassicConversation).mockResolvedValue(parseConversationFile(fixtureText("classic-conversation")))
+  const mind = parseMindConversation(fixtureText("mind-conversation"))
   vi.mocked(exportMindHistory).mockResolvedValue(mind)
   const agentic = JSON.parse(JSON.stringify(mind))
   agentic.format = "venice-sync-agentic-conversation"; delete agentic.conversation.mindId; delete agentic.conversation.remoteMindId
   vi.mocked(exportAgenticHistory).mockResolvedValue(parseAgenticConversation(JSON.stringify(agentic)))
-  vi.mocked(exportCharacter).mockResolvedValue(parseCharacterFile(readFileSync("scripts\\fixtures\\character.json", "utf8")))
+  vi.mocked(exportCharacter).mockResolvedValue(parseCharacterFile(fixtureText("character")))
   const bytes = new Uint8Array([5, 6, 7])
   const pkg: MindPackage = { manifest: { format: "venice-sync-mind", version: 1, exportedAt: "test",
     definition: { id: "mind", name: "Synthetic", systemPrompt: { instructions: "Test" }, tools: {}, assets: {} },
@@ -71,13 +73,13 @@ describe("batch native export orchestration", () => {
   })
   it("rejects partial failures and does not continue reading later selections", async () => {
     vi.mocked(exportMindPackage).mockRejectedValue(new Error("Missing original"))
-    await expect(exportBatch([selection("classic"), selection("mind"), selection("library")])).rejects.toThrow('mind "mind fixture": Missing original')
+    await expect(exportBatch([selection("classic"), selection("mind"), selection("library")])).rejects.toThrow('Selection: ["mind","mind"]')
     expect(exportLibraryAsset).not.toHaveBeenCalled()
   })
   it("rejects an account switch, cancellation and repeated selection", async () => {
     vi.mocked(exportClassicConversation).mockImplementationOnce(async () => {
       vi.mocked(currentVeniceOwner).mockReturnValue("other")
-      return parseConversationFile(readFileSync("scripts\\fixtures\\classic-conversation.json", "utf8"))
+      return parseConversationFile(fixtureText("classic-conversation"))
     })
     await expect(exportBatch([selection("classic")])).rejects.toThrow("account changed")
     const abort = new AbortController(); abort.abort()

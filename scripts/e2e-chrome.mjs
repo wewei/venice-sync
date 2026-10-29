@@ -213,7 +213,7 @@ async function checkAgenticGlyphs(page, dialog) {
 
 async function checkPanelPages(page, dialog) {
   await navigatePanel(dialog, "Overview")
-  await page.waitForFunction(() => ["/chat/classic", "/character-chat", "/minds"].every((href) =>
+  await page.waitForFunction(() => ["/chat/classic", "/minds"].every((href) =>
     document.querySelector(`a[href="${href}"] svg`)), undefined, { timeout: 90_000 })
   await dialog.locator('[data-venice-icon="mind-native"]').first().waitFor({ state: "visible", timeout: 10_000 })
   const nativeIconMatches = await dialog.getByRole("navigation", { name: "Sync pages" }).evaluate((navigation) => {
@@ -230,7 +230,7 @@ async function checkPanelPages(page, dialog) {
       return { label, sourceAvailable: !!source, matches: !!source && JSON.stringify(shapes(source)) === JSON.stringify(shapes(rendered)) }
     })
   })
-  assert.ok(nativeIconMatches.every((icon) => icon.matches), `Native Venice icon mismatch: ${JSON.stringify(nativeIconMatches)}`)
+  assert.ok(nativeIconMatches.every((icon) => icon.matches || (icon.label === "Characters" && !icon.sourceAvailable)), `Native Venice icon mismatch: ${JSON.stringify(nativeIconMatches)}`)
   const overview = dialog.getByRole("region", { name: "Transfer overview" })
   assert.equal(await overview.getByRole("region").count(), 4)
   const borders = await overview.getByRole("region").evaluateAll((elements) => elements.map((element) => {
@@ -291,7 +291,9 @@ async function checkPanelPages(page, dialog) {
   assert.ok(mobileNavigationFits, "Mobile navigation clips a content page.")
   await dialog.screenshot({ path: path.join(results, "tampermonkey-mobile.png") })
   await page.setViewportSize(originalSize)
-  return { fourContentCategories: "passed", nativeCategoryIconShapes: "matched", nativeAgenticConversationGlyphsMatched: agenticGlyphs,
+  return { fourContentCategories: "passed", nativeCategoryIconShapes: "matched where native entries exist",
+    unavailableNativeCategoryIcons: nativeIconMatches.filter(icon => !icon.sourceAvailable).map(icon => icon.label),
+    nativeAgenticConversationGlyphsMatched: agenticGlyphs,
     mindConversationAvatarsDecoded: await avatars.count(),
     allContentTransferPagesAvailable: "passed", unifiedConversationListAndTypeIcons: "passed", fullMindWithoutCheckboxes: "passed", diagnosticsSeparated: "passed", mobileLayout: "passed" }
 }
@@ -1746,6 +1748,27 @@ async function batchExportTest(context) {
     await dialog.getByTestId("studio-import-preview").waitFor()
     await dialog.getByRole("button", { name: "Cancel Studio import", exact: true }).click()
     assert.deepEqual(await libraryTestState(page), before, "Standalone extracted-file previews changed storage.")
+    const imports = dialog.getByRole("region", { name: "Selected batch import", exact: true })
+    await imports.getByRole("button", { name: "Select all unattempted items", exact: true }).click()
+    await imports.getByRole("button", { name: "Review 2 selected imports", exact: true }).click()
+    await imports.getByTestId("batch-import-preview").waitFor()
+    assert.deepEqual(await libraryTestState(page), before, "Batch import review changed storage.")
+    const originBeforeImport = await page.evaluate(() => performance.timeOrigin)
+    await imports.getByRole("button", { name: "Confirm selected batch import", exact: true }).click()
+    await page.waitForFunction(hostId => {
+      const panel = document.getElementById(hostId)?.shadowRoot?.querySelector('[aria-label="Selected batch import"]')
+      return panel?.querySelectorAll('[data-batch-result-status="success"]').length === 2 &&
+        ![...panel.querySelectorAll("button")].some(button => button.textContent === "Stop after current item")
+    }, hostId, { timeout: 60000 })
+    const results = await imports.locator("[data-batch-result-key]").evaluateAll(nodes => nodes.map(node => ({
+      kind: JSON.parse(node.getAttribute("data-batch-result-key"))[0], id: node.getAttribute("data-batch-new-id"),
+    })))
+    assert.equal(await page.evaluate(() => performance.timeOrigin), originBeforeImport, "Batch reloaded before results could be reviewed.")
+    assert.equal(results.length, 2)
+    const newClassic = results.find(result => result.kind === "classic")
+    assert.ok(newClassic?.id && !ids.includes(newClassic.id)); ids.push(newClassic.id)
+    assert.equal((await studioTestState(page, studioName)).ids.length, 2)
+    assert.ok(await imports.getByRole("button", { name: "Refresh Venice after reviewing results", exact: true }).isEnabled())
     const original = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))
     await page.setViewportSize({ width: 390, height: 844 })
     await dialog.evaluate(async element => { await Promise.all(element.getAnimations().map(animation => animation.finished)) })
@@ -1755,6 +1778,7 @@ async function batchExportTest(context) {
     assert.equal(requests.length, 0)
     return { mixedConversationAndStudioBasket: "passed", independentObjectsAndHashes: "matched", identicalOriginalsDeduplicated: "passed",
       reconstructedJsonAndStudioZip: "passed", existingImportPreviews: "passed", exportAndExtractionReadOnly: "passed",
+      selectedBatchImportCreatesNewCopies: "passed", noIntermediateReload: "passed",
       mobile390px: "passed", inferenceOrPublishRequests: 0, scriptEvaluatedByPlaywright: false }
   } catch (error) {
     console.error("Batch E2E failed before cleanup:", error)

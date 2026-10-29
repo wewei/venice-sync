@@ -62,7 +62,7 @@ export async function exportBatch(selections: BatchSelection[], options: { signa
         yield prepared
       } catch (error) {
         options.signal?.throwIfAborted()
-        throw new Error(`Could not export ${selection.kind} "${selection.title}": ${error instanceof Error ? error.message : String(error)}. No partial batch was downloaded.`, { cause: error })
+        throw new Error(`Could not export ${selection.kind} "${selection.title}": ${error instanceof Error ? error.message : String(error)}. No partial batch was downloaded. Selection: ${batchKey(selection)}`, { cause: error })
       }
     }
   }
@@ -73,17 +73,20 @@ export async function exportBatch(selections: BatchSelection[], options: { signa
 }
 
 export async function validateBatchContents(pkg: BatchPackage): Promise<void> {
-  for (const item of pkg.manifest.items) {
+  for (const item of pkg.manifest.items) await readBatchItem(pkg, item)
+}
+
+export async function readBatchItem(pkg: BatchPackage, item: BatchItem) {
     assertPackaging(item)
     const files = Object.fromEntries(item.files.map(file => [file.path, pkg.objects[file.object]]))
     const metadata = files[item.packaging === "json" ? "export.json" : "manifest.json"]
     if (!metadata || metadata.length > 8 * 1024 * 1024) throw new Error("Batch item metadata exceeds its 8 MiB single-item limit.")
     const json = () => strFromU8(files["export.json"])
     switch (item.kind) {
-      case "classic": parseConversationFile(json()); break
-      case "mind-history": parseMindConversation(json()); break
-      case "agentic": parseAgenticConversation(json()); break
-      case "character": parseCharacterFile(json()); break
+      case "classic": return { kind: item.kind, file: parseConversationFile(json()) } as const
+      case "mind-history": return { kind: item.kind, file: parseMindConversation(json()) } as const
+      case "agentic": return { kind: item.kind, file: parseAgenticConversation(json()) } as const
+      case "character": return { kind: item.kind, file: parseCharacterFile(json()) } as const
       case "mind": {
         const manifest = validateMindManifest(JSON.parse(strFromU8(files["manifest.json"])))
         const resources = Object.fromEntries(manifest.files.map(file => {
@@ -91,18 +94,17 @@ export async function validateBatchContents(pkg: BatchPackage): Promise<void> {
           return [path, files[path]]
         }))
         if (Object.keys(files).length !== Object.keys(resources).length + 1) throw new Error("Unexpected files in batch Mind item.")
-        await validateMindPackage({ manifest, files: resources }); break
+        return { kind: item.kind, file: await validateMindPackage({ manifest, files: resources }) } as const
       }
       case "library":
         if (Object.keys(files).length !== 2) throw new Error("Unexpected files in batch Library item.")
-        await validateLibraryPackage({ manifest: validateLibraryManifest(JSON.parse(strFromU8(files["manifest.json"]))), bytes: files["asset.bin"] }); break
+        return { kind: item.kind, file: await validateLibraryPackage({ manifest: validateLibraryManifest(JSON.parse(strFromU8(files["manifest.json"]))), bytes: files["asset.bin"] }) } as const
       case "studio-image":
       case "studio-audio": {
         const manifest = validateStudioManifest(JSON.parse(strFromU8(files["manifest.json"])))
         if (manifest.kind !== (item.kind === "studio-image" ? "image" : "audio")) throw new Error("Studio kind does not match batch item.")
         delete files["manifest.json"]
-        await validateStudioPackage({ manifest, files }); break
-      }
+        return { kind: item.kind, file: await validateStudioPackage({ manifest, files }) } as const
     }
   }
 }

@@ -23,8 +23,8 @@ Open **Export basket (N)** to review/remove entries or clear the basket, then us
 **Download export basket** to download one ZIP. Existing single-item downloads
 remain available. Selecting a Mind chooses the entire definition/resources/saved
 Builder/Preview package, not parts of it. Mind chat histories remain separate
-items and do not automatically add the Mind definition or bind to a newly
-imported Mind. Existing per-type support limits still apply.
+items and do not automatically add the Mind definition. Existing per-type support
+limits still apply.
 
 Export reads items sequentially using the existing native owner/schema guards.
 It shows progress, checks account identity again before download, and stops on
@@ -47,9 +47,39 @@ JSON whitespace/key ordering and ZIP entry timestamps may differ, but original
 media bytes and portable record content are preserved. Nothing is imported,
 overwritten, executed or published merely by opening/extracting a batch.
 
-This version deliberately does **not** implement bulk import, automatic Mind
-dependency restoration, merging, version rollback, device synchronization,
-sharing or CAS upload.
+### Selecting items for batch import
+
+The opened batch also offers **Select all unattempted items** and individual
+checkboxes. Select any subset, choose **Review N selected imports**, then
+**Confirm selected batch import**. Opening/selecting/reviewing remains read-only:
+the whole archive and original formats are checked before any writes, and
+supported native Mind schemas are checked when the selection requires them.
+
+Selected local Mind definitions are imported first. A selected history whose
+original local Mind definition is also selected binds to that new definition ID.
+If the definition is not selected (or the history belongs to a remote Mind),
+choose an explicit verified destination from the current account before
+confirmation. No definition is pulled into the selection implicitly.
+
+Imports create new IDs/copies through the existing per-type importers. They run
+sequentially, not as a cross-store all-or-nothing transaction. The first failed
+item stops later items; successful copies remain, and the result log includes
+their new IDs and the exact failure. **Stop after current item** lets the current
+write/rollback finish before stopping. Attempted rows are disabled to prevent
+accidental retries, including failed rows whose cleanup may require inspection.
+Remaining unattempted items can be reviewed in a new selection.
+
+Keep the browser tab open during writes. Sync prevents its own dialog from
+closing during the running import, but cannot protect against closing the tab,
+browser shutdown or a crash. There is no automatic page reload during a batch.
+After reviewing the results, use **Refresh Venice after reviewing results**
+once if any successful importer needs the native caches refreshed. A failed
+refresh is reported as an already-completed import, not an invitation to duplicate
+the copies. The destination account is checked at preview and between writes.
+
+This version does **not** implement existing-record overwrite/merge, whole-account
+rollback, device synchronization, sharing or CAS upload. Reopening and importing
+the same archive again creates additional copies; it is not incremental sync.
 
 ### CAS-compatible transport boundary
 
@@ -566,6 +596,19 @@ Chrome and approve the connection prompt. Alternatively set `CDP_ENDPOINT` to a
 Chrome CDP WebSocket or HTTP endpoint. The Windows default reads Chrome's
 `DevToolsActivePort` file; it does not copy a browser profile or credentials.
 
+For a separate **Chrome for Testing** instance, explicitly select its endpoint
+instead of accidentally using your everyday Chrome profile. For example:
+
+```powershell
+$env:CDP_ENDPOINT = "http://127.0.0.1:9223"
+npm run test:e2e -- --install --batch
+```
+
+Sign in to Venice and install Tampermonkey in that instance independently.
+Enable **Allow user scripts** in that instance's extension details too; an
+enabled extension alone is insufficient. Neither credentials nor browser profile
+directories are copied between instances. Batch archives transfer content only.
+
 In Chrome's Tampermonkey extension details, explicitly enable **Allow user
 scripts** (`chrome://extensions/?id=dhdgffkkebhmkfjojejmpbldmpobfkfo`). Merely
 installing Tampermonkey or a script does not enable execution. This permission
@@ -616,7 +659,8 @@ npm run test:e2e -- --install --library
 npm run test:e2e -- --install --studio-sessions
 
 # Mixed Classic/Studio export basket, object deduplication, read-only open,
-# extracted JSON/ZIP compatibility, mobile layout and targeted fixture cleanup.
+# extracted JSON/ZIP compatibility, selected multi-import without intermediate
+# reload, mobile layout and targeted fixture cleanup.
 npm run test:e2e -- --install --batch
 
 # Optionally verify a selected current-account Character via a temporary copy,
@@ -674,6 +718,8 @@ otherwise install manually using the instructions above and retry.
 - `src/BatchBasket.tsx`: shared shopping-basket selection, progress/cancel and read-only extraction.
 - `src/batch-format.ts`: bounded object-addressed batch ZIP and standalone file reconstruction.
 - `src/batch-export.ts`: existing native export adapters and original-format validation.
+- `src/batch-import.ts`: selected import planning, verified Mind destinations and per-item outcomes.
+- `src/BatchImportPanel.tsx`: selection/review/confirmation, partial results and one final refresh.
 - `src/ConversationTransfer.tsx`: conversation list, download and import preview/confirmation.
 - `src/MindAvatar.tsx`: local OPFS avatar loading, fallback/error display and URL cleanup.
 - `src/components/IconAction.tsx`: consistently named icon-only actions with hover titles.

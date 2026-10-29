@@ -6,6 +6,7 @@ import { BatchContext } from "./batch-context"
 import { batchKey, decodeBatch, encodeBatch, MAX_BATCH_BYTES, MAX_BATCH_ITEMS, reconstructBatchItem, type BatchPackage, type BatchSelection } from "./batch-format"
 import { exportBatch, validateBatchContents } from "./batch-export"
 import { currentVeniceOwner } from "./venice-classic"
+import { BatchImportPanel } from "./BatchImportPanel"
 
 function downloadBytes(bytes: Uint8Array, filename: string, type: string) {
   const url = URL.createObjectURL(new Blob([Uint8Array.from(bytes).buffer], { type }))
@@ -31,7 +32,9 @@ export function BasketAddAll({ items, label, disabled = false }: { items: BatchS
   </Button>
 }
 
-export function BatchBasket({ children }: { children: ReactNode }) {
+export function BatchBasket({ children, reloadPage, onImportingChange }: {
+  children: ReactNode; reloadPage?: () => void; onImportingChange?: (busy: boolean) => void
+}) {
   const [items, setItems] = useState<BatchSelection[]>([])
   const [busy, setBusy] = useState(false), [expanded, setExpanded] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -83,7 +86,7 @@ export function BatchBasket({ children }: { children: ReactNode }) {
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4">
       <section aria-label="Export basket" className="grid shrink-0 gap-2 rounded-lg border p-3 text-sm">
         <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="outline" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>Export basket ({items.length})</Button>
+          <Button size="sm" variant="outline" aria-expanded={expanded} disabled={busy} onClick={() => setExpanded(value => !value)}>Export basket ({items.length})</Button>
           <IconAction label="Download export basket" disabled={busy || !items.length} onClick={() => void download()}><IconDownload aria-hidden="true" /></IconAction>
           <IconAction label="Open batch archive" disabled={busy} onClick={() => fileInput.current?.click()}><IconFolderOpen aria-hidden="true" /></IconAction>
           {busy && exporting && <Button size="sm" variant="outline" onClick={() => controller.current?.abort()}>Cancel batch export</Button>}
@@ -102,7 +105,7 @@ export function BatchBasket({ children }: { children: ReactNode }) {
           </div>)}
           {archive && <section aria-label="Opened batch contents" className="grid gap-2">
             <h3 className="font-medium">Take items out of this batch ({archive.manifest.items.length})</h3>
-            <p className="text-xs text-muted-foreground">Download one original-format JSON/ZIP, then select it in its existing import page. No bulk import, account matching or Mind rebinding is performed here.</p>
+            <p className="text-xs text-muted-foreground">Take out an original-format file, or select items below to review and import new copies. Opening the batch itself writes nothing.</p>
             <Button size="sm" variant="ghost" className="w-fit" disabled={busy} onClick={() => setArchive(undefined)}>Close opened batch</Button>
             {archive.manifest.items.map(item => <div key={batchKey(item)} className="flex min-w-0 items-center gap-2">
               <span className="min-w-0 flex-1 truncate" title={item.title}>{item.kind} · {item.title}</span>
@@ -111,6 +114,7 @@ export function BatchBasket({ children }: { children: ReactNode }) {
                 catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)) }
               }}><IconDownload aria-hidden="true" /></IconAction>
             </div>)}
+            {reloadPage && <BatchImportPanel archive={archive} busy={busy} onBusyChange={setBusy} onImportingChange={onImportingChange} reloadPage={reloadPage} />}
           </section>}
         </div>}
       </section>

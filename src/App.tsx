@@ -21,12 +21,13 @@ interface AppProps {
 export function App({ runtime, portalContainer }: AppProps) {
   const [clicks, setClicks] = useState(0)
   const [open, setOpen] = useState(false)
+  const [importing, setImporting] = useState(false)
   const launcher = useRef<HTMLButtonElement>(null)
   const returnFocus = useRef<HTMLElement | undefined>(undefined)
   const panel = useRef<HTMLDivElement>(null)
 
   return (
-    <Dialog modal={false} open={open} onOpenChange={setOpen}>
+    <Dialog modal={false} open={open} onOpenChange={(value) => { if (!importing) setOpen(value) }}>
       {runtime.mode === "preview" ? <DialogTrigger asChild>
         <Button
           ref={launcher}
@@ -36,14 +37,16 @@ export function App({ runtime, portalContainer }: AppProps) {
           <IconArrowsExchange aria-hidden="true" />
           Venice Sync
         </Button>
-      </DialogTrigger> : <SidebarLauncher buttonRef={launcher} expanded={open} onOpen={(element) => { returnFocus.current = element; setOpen(true) }} onClose={() => setOpen(false)} />}
+      </DialogTrigger> : <SidebarLauncher buttonRef={launcher} expanded={open} onOpen={(element) => { returnFocus.current = element; setOpen(true) }} onClose={() => { if (!importing) setOpen(false) }} />}
       <DialogContent
         portalContainer={portalContainer}
+        showCloseButton={!importing}
         className="pointer-events-auto flex h-[min(54rem,calc(100dvh-2rem))] max-h-[calc(100dvh-2rem)] flex-col gap-6 overflow-hidden p-5 sm:max-w-[min(72rem,calc(100vw-4rem))] sm:p-7"
         onFocusOutside={(event) => event.preventDefault()}
         onPointerDownOutside={(event) => {
-          if (launcher.current && event.detail.originalEvent.composedPath().includes(launcher.current)) event.preventDefault()
+          if (importing || (launcher.current && event.detail.originalEvent.composedPath().includes(launcher.current))) event.preventDefault()
         }}
+        onEscapeKeyDown={(event) => { if (importing) event.preventDefault() }}
         onOpenAutoFocus={(event) => {
           event.preventDefault()
           panel.current?.querySelector<HTMLButtonElement>('[aria-current="page"]')?.focus()
@@ -66,6 +69,7 @@ export function App({ runtime, portalContainer }: AppProps) {
             clicks={clicks}
             onTestInteraction={() => setClicks((value) => value + 1)}
             reloadPage={() => window.location.reload()}
+            onImportingChange={setImporting}
           />
         </div>
       </DialogContent>
