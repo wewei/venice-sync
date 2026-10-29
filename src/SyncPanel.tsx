@@ -11,6 +11,7 @@ import { StudioTransfer } from "./StudioTransfer"
 import type { RuntimeInfo } from "./runtime"
 import { StorageOverview } from "./StorageOverview"
 import { VeniceCharactersIcon, VeniceClassicIcon, VeniceLibraryIcon, VeniceMindIcon } from "./components/VeniceIcons"
+import { BatchBasket } from "./BatchBasket"
 
 const contentPages = [
   { id: "conversations", title: "Conversations", Icon: VeniceClassicIcon, ready: true,
@@ -110,7 +111,7 @@ export function SyncPanel({ runtime, clicks, onTestInteraction, reloadPage }: Sy
   ] as const
 
   return (
-    <div data-testid="sync-panel" className="flex min-h-0 min-w-0 flex-1 flex-col gap-6 sm:flex-row">
+    <BatchBasket><div data-testid="sync-panel" className="flex min-h-0 min-w-0 flex-1 flex-col gap-6 sm:flex-row">
       <nav ref={navigation} aria-label="Sync pages" className="grid shrink-0 grid-cols-2 gap-1 border-b pb-3 sm:flex sm:w-48 sm:flex-col sm:border-r sm:border-b-0 sm:pr-4 sm:pb-0">
         {links.map(({ id, title, Icon }) => (
           <Button key={id} variant={page === id ? "secondary" : "ghost"} className="h-10 min-w-0 justify-start gap-3" aria-current={page === id ? "page" : undefined} onClick={() => navigate(id)}>
@@ -159,6 +160,6 @@ export function SyncPanel({ runtime, clicks, onTestInteraction, reloadPage }: Sy
         </div>}
         {page === "details" && <DetailsPage runtime={runtime} clicks={clicks} onTestInteraction={onTestInteraction} />}
       </div>
-    </div>
+    </div></BatchBasket>
   )
 }

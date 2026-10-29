@@ -6,6 +6,7 @@ import { VeniceCharactersIcon } from "./components/VeniceIcons"
 import { MAX_CHARACTER_BYTES, parseCharacterFile, type CharacterFile } from "./character-format"
 import { downloadTransferJson, readTransferFile } from "./transfer-files"
 import { exportCharacter, importCharacter, listCharacters, loadCharacterPortrait } from "./venice-characters"
+import { BasketAddAll, BasketItem } from "./BatchBasket"
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error)
 
@@ -88,12 +89,14 @@ export function CharacterTransfer({ reloadPage }: { reloadPage: () => void }) {
         onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void selectFile(file) }} />
       {loading && <p role="status">Reading Characters...</p>}
       {error && <p role="alert">{error}</p>}
+      {!loading && <BasketAddAll items={characters.map(character => ({ kind: "character", id: character.id, title: character.name }))} label="loaded Characters" disabled={busy} />}
       {!loading && !error && <div data-testid="character-list" className="grid gap-2">
         <p className="text-sm text-muted-foreground">{characters.length} local Characters</p>
         {characters.length === 0 && <p className="rounded-xl border p-8 text-center text-muted-foreground">No local Characters in this account.</p>}
         {characters.map((character) => <article key={character.id} data-character-id={character.id} className="flex min-w-0 items-center gap-4 rounded-xl border p-4">
           <CharacterPortrait id={character.id} name={character.name} hasPhoto={character.hasPhoto} />
           <div className="min-w-0 flex-1"><h3 className="truncate font-medium" title={character.name}>{character.name}</h3><p className="mt-1 truncate text-sm text-muted-foreground">{character.description}</p></div>
+          <BasketItem item={{ kind: "character", id: character.id, title: character.name }} disabled={busy} />
           <IconAction label="Export Character JSON" disabled={busy} onClick={() => void download(character.id)}><IconDownload aria-hidden="true" /></IconAction>
         </article>)}
       </div>}

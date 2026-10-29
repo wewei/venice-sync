@@ -10,6 +10,8 @@ import { exportAgenticHistory, exportMindHistory, importAgenticHistory, importMi
 import { VeniceAgenticIcon, VeniceClassicIcon, VeniceMindIcon } from "./components/VeniceIcons"
 import { MindAvatar } from "./MindAvatar"
 import type { MindAvatarReference } from "./mind-avatars"
+import { BasketAddAll, BasketItem } from "./BatchBasket"
+import type { BatchSelection } from "./batch-format"
 
 type ConversationKind = "classic" | "mind" | "agentic"
 interface Row {
@@ -21,6 +23,7 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : S
 const key = (target: MindTarget) => `${target.kind}:${target.id}`
 const typeNames = { classic: "Classic", mind: "Mind", agentic: "Agentic" }
 const typeIcons = { classic: VeniceClassicIcon, mind: VeniceMindIcon, agentic: VeniceAgenticIcon }
+const batchSelection = (row: Row): BatchSelection => ({ kind: row.kind === "mind" ? "mind-history" : row.kind, id: row.id, title: row.name })
 
 export function ConversationTransfer({ reloadPage }: { reloadPage: () => void }) {
   const [rows, setRows] = useState<Row[]>([])
@@ -137,6 +140,7 @@ export function ConversationTransfer({ reloadPage }: { reloadPage: () => void })
       {loading && <p role="status">Reading conversations...</p>}
       {readErrors.map((failure) => <p role="alert" key={failure} className="text-sm">{failure}</p>)}
       {error && <p role="alert" className="text-sm">{error}</p>}
+      {!loading && <BasketAddAll items={rows.map(batchSelection)} label="loaded conversations" disabled={busy} />}
       {!loading && <div data-testid="conversation-list" className="grid gap-2">
         <p className="text-sm text-muted-foreground">{rows.length} conversations{readErrors.length ? " (some sources unavailable)" : ""}</p>
         {rows.length === 0 && <p className="rounded-xl border p-8 text-center text-muted-foreground">{readErrors.length ? "No conversations could be loaded from the available sources." : "No conversations in this account."}</p>}
@@ -149,6 +153,7 @@ export function ConversationTransfer({ reloadPage }: { reloadPage: () => void })
             <div className="min-w-0 flex-1"><h3 className="truncate font-medium" title={row.name}>{row.name}</h3>
               <p className="mt-1 truncate text-sm text-muted-foreground" title={row.detail}>{row.messages} messages · {row.detail}</p>
             </div>
+            <BasketItem item={batchSelection(row)} disabled={busy} />
             <IconAction label={row.kind === "mind" ? "Export Mind JSON" : row.kind === "agentic" ? "Export Agentic JSON" : "Export JSON"} disabled={busy} onClick={() => void exportConversation(row)}><IconDownload aria-hidden="true" /></IconAction>
           </article>
         })}

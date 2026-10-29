@@ -9,6 +9,81 @@ asset ZIP import/export. Classic Studio image/audio sessions can also be
 transferred as editable session ZIPs, separately from individual Library assets.
 Cloud synchronization is not implemented.
 
+## Batch export basket
+
+Use the basket-plus icon on any Conversation, Mind, Character, Library asset or
+Studio session to **add it to the export basket**. The basket is shared across
+pages while the Sync dialog stays open; switching pages does not lose selections.
+Adding the same type/ID again does not duplicate it. **Add all loaded ...** adds
+the entire currently loaded result, including rows behind **Show more**, not just
+visible cards. Unavailable sources are not included; their existing errors remain
+visible. Opening a page is still lazy; this is not an implicit whole-account backup.
+
+Open **Export basket (N)** to review/remove entries or clear the basket, then use
+**Download export basket** to download one ZIP. Existing single-item downloads
+remain available. Selecting a Mind chooses the entire definition/resources/saved
+Builder/Preview package, not parts of it. Mind chat histories remain separate
+items and do not automatically add the Mind definition or bind to a newly
+imported Mind. Existing per-type support limits still apply.
+
+Export reads items sequentially using the existing native owner/schema guards.
+It shows progress, checks account identity again before download, and stops on
+the first unsupported/missing/changed item rather than silently skipping it.
+Failure or cancellation produces **no partial batch** and retains the basket.
+Cancellation takes effect at asynchronous read/hash boundaries; an ongoing
+native read or synchronous ZIP operation cannot be interrupted immediately.
+Closing the dialog discards selections and prevents a pending export download.
+Finish ongoing editing/generation/imports first: individually checked exports
+are **not an atomic multi-item account snapshot**.
+
+### Opening a batch and taking items out
+
+Use **Open batch archive** in the basket toolbar. The whole package's paths,
+limits, hashes and original single-item formats are validated before showing its
+contents. This is read-only and can be used without signing in to an exporting
+account. Click **Take out item** to reconstruct one original-format JSON or ZIP;
+select that file on its existing import page to preview and confirm a new copy.
+JSON whitespace/key ordering and ZIP entry timestamps may differ, but original
+media bytes and portable record content are preserved. Nothing is imported,
+overwritten, executed or published merely by opening/extracting a batch.
+
+This version deliberately does **not** implement bulk import, automatic Mind
+dependency restoration, merging, version rollback, device synchronization,
+sharing or CAS upload.
+
+### CAS-compatible transport boundary
+
+The `venice-sync-batch` v1 ZIP contains:
+
+```text
+manifest.json          # selected items and their logical file-to-object maps
+objects/{sha256}       # unchanged file/metadata bytes, deduplicated across items
+```
+
+Each item records its content type, source ID, display title, output filename,
+JSON/ZIP packaging, and the paths/byte sizes/SHA-256 of its files. ZIP-type items
+store their original manifest and resources as separate objects, **not nested
+ZIP files**. Identical originals referenced by different items share one object.
+JSON is serialized with sorted object keys; array order and meaningful text are
+preserved. Existing inline Character portraits stay inside native Character JSON.
+Per-export timestamps remain metadata, so this is not yet a stable cross-device
+logical-entity/version identity or optimized historical snapshot scheme.
+
+The logical object graph is prepared before ZIP serialization. A future UniCAS
+adapter can consume the same manifest and byte objects rather than uploading a
+monolithic ZIP. **These raw SHA-256 file hashes are not UniCAS canonical node
+digests**; node encoding, capability authorization, retention and catalog commits
+still belong to that future integration. The current implementation neither
+contacts UniCAS nor claims that an upload/lease is durable storage.
+
+Limits: 200 selected items, 4096 logical files, 8 MiB batch/item JSON metadata,
+128 MiB logical file total, expanded object+manifest total and final ZIP. Logical
+size counts repeated references conservatively even when bytes are deduplicated.
+Single-item limits also remain in force. Archives and metadata are unencrypted;
+titles, prompts, histories and resources may be private. Keep downloads secure.
+Preparation/validation and ZIP operations use memory, so split large selections
+into smaller baskets, especially on phones.
+
 ## Storage model
 
 See [Venice.ai 存储模型](docs/venice-storage-model.md) for the observed business
@@ -540,6 +615,10 @@ npm run test:e2e -- --install --library
 # native editors/original media, read-only cancel and targeted fixture cleanup.
 npm run test:e2e -- --install --studio-sessions
 
+# Mixed Classic/Studio export basket, object deduplication, read-only open,
+# extracted JSON/ZIP compatibility, mobile layout and targeted fixture cleanup.
+npm run test:e2e -- --install --batch
+
 # Optionally verify a selected current-account Character via a temporary copy,
 # with its original record and portrait fingerprints unchanged.
 npm run test:e2e -- --characters --character=LOCAL_CHARACTER_ID
@@ -592,6 +671,9 @@ otherwise install manually using the instructions above and retry.
 - `src/sidebar-launcher.ts`: native header lifecycle/space guards and mobile Drawer sequencing.
 - `src/App.tsx`: non-modal panel and retained smoke-test counter.
 - `src/SyncPanel.tsx`: four content pages, transfer overview and lazy Details diagnostics.
+- `src/BatchBasket.tsx`: shared shopping-basket selection, progress/cancel and read-only extraction.
+- `src/batch-format.ts`: bounded object-addressed batch ZIP and standalone file reconstruction.
+- `src/batch-export.ts`: existing native export adapters and original-format validation.
 - `src/ConversationTransfer.tsx`: conversation list, download and import preview/confirmation.
 - `src/MindAvatar.tsx`: local OPFS avatar loading, fallback/error display and URL cleanup.
 - `src/components/IconAction.tsx`: consistently named icon-only actions with hover titles.

@@ -7,6 +7,7 @@ import {
   decodeLibraryPackage, encodeLibraryPackage, MAX_LIBRARY_ZIP, rawLibraryPackage, type LibraryPackage,
 } from "./library-format"
 import { exportLibraryAsset, importLibraryAsset, listLibraryAssets, readLibraryAsset, type LibraryAsset } from "./venice-library"
+import { BasketAddAll, BasketItem } from "./BatchBasket"
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error)
 const sizeText = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(2)} MiB`
@@ -116,6 +117,7 @@ export function LibraryTransfer({ reloadPage }: { reloadPage: () => void }) {
         onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void selectFile(file) }} />
       {loading && <p role="status">Reading Library assets...</p>}
       {error && <p role="alert">{error}</p>}
+      {!loading && <BasketAddAll items={assets.map(asset => ({ kind: "library", id: asset.key, title: asset.title }))} label="loaded Library assets" disabled={busy} />}
       {!loading && <div data-testid="library-asset-list" className="grid gap-3">
         <p className="text-sm text-muted-foreground">{assets.length} Library assets</p>
         {!assets.length && !error && <p className="rounded-xl border p-8 text-center text-muted-foreground">No generated Library assets in this account.</p>}
@@ -126,6 +128,7 @@ export function LibraryTransfer({ reloadPage }: { reloadPage: () => void }) {
               <div className="min-w-0 flex-1"><h3 className="truncate font-medium" title={asset.title}>{asset.title}</h3>
                 <p className="mt-1 text-xs text-muted-foreground">{asset.kind} · {asset.originalSource ? "Imported copy" : sources[asset.source]}</p>
               </div>
+              <BasketItem item={{ kind: "library", id: asset.key, title: asset.title }} disabled={busy} />
               <IconAction label="Export Library asset ZIP" disabled={busy} onClick={() => void download(asset)}><IconDownload aria-hidden="true" /></IconAction>
             </div>
           </article>)}

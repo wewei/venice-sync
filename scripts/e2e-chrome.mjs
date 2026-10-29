@@ -21,6 +21,7 @@ const agenticTransfer = process.argv.includes("--agentic-transfer")
 const charactersTransfer = process.argv.includes("--characters")
 const libraryTransfer = process.argv.includes("--library")
 const studioTransfer = process.argv.includes("--studio-sessions")
+const batchTransfer = process.argv.includes("--batch")
 const mindPackage = process.argv.includes("--mind-package")
 const selectedConversation = process.argv.find((argument) => argument.startsWith("--conversation="))?.slice("--conversation=".length)
 const selectedAgentic = process.argv.find((argument) => argument.startsWith("--agentic-conversation="))?.slice("--agentic-conversation=".length)
@@ -58,7 +59,7 @@ async function installScript(context) {
   const sourcePage = await context.newPage()
   console.log("Opening the built userscript in Tampermonkey.")
   try {
-    await sourcePage.goto(`${scriptUrl}?build=${createHash("sha256").update(artifact).digest("hex")}`, {
+    await sourcePage.goto(`${scriptUrl}?build=${createHash("sha256").update(artifact).digest("hex")}&install=${Date.now()}`, {
       waitUntil: "domcontentloaded",
       timeout: 30_000,
     })
@@ -1655,6 +1656,117 @@ async function studioSessionTransferTest(context, kind = "image") {
     nativeEditorOriginalVisible: "passed", inferenceOrPublishRequests: 0, scriptEvaluatedByPlaywright: false }
 }
 
+async function batchExportTest(context) {
+  const page = await context.newPage()
+  await page.goto("https://venice.ai/chat/classic", { waitUntil: "domcontentloaded" })
+  await waitForSignedInVenice(page); await page.bringToFront()
+  const prefix = `Venice-Sync-Studio-E2E-Batch-${Date.now()}`, ids = []
+  const baseline = await libraryTestState(page)
+  const studioName = `${prefix}-studio`, studioBaseline = (await studioTestState(page, studioName)).fingerprint
+  const host = page.locator(`#${hostId}`), dialog = host.getByRole("dialog", { name: "Venice Sync", exact: true })
+  const fixture = JSON.parse(await readFile(path.join(root, "scripts/fixtures/classic-conversation.json"), "utf8"))
+  fixture.conversation.name = `${prefix}-chat`
+  const media = (await syntheticLibraryFiles(page, prefix))[0]
+  const sessionId = crypto.randomUUID(), turnId = crypto.randomUUID(), inputId = crypto.randomUUID(), outputId = crypto.randomUUID()
+  const studioMedia = [inputId, outputId].map((id, index) => ({
+    id, sessionId, turnId, createdAtUnixTimestamp: 2, mimeType: "image/png", fileName: `media/${sessionId}/${id}.png`,
+    mediaRole: index ? "output" : "input", ...(index ? { modelId: "venice-sync-test", prompt: studioName, source: "edit", imageSettings: { width: 32, height: 32 } } : {}),
+  }))
+  const studioManifest = {
+    format: "venice-sync-studio-session", version: 1, kind: "image", exportedAt: new Date().toISOString(),
+    session: { id: sessionId, type: "edit", name: studioName, selectedImageId: outputId, createdAtUnixTimestamp: 1, updatedAtUnixTimestamp: 3 },
+    turns: [{ id: turnId, sessionId, createdAtUnixTimestamp: 2, prompt: studioName, mode: "edit", input: { id: inputId, mimeType: "image/png", fileName: studioMedia[0].fileName } }],
+    media: studioMedia, files: studioMedia.map(row => ({ id: row.id, path: row.fileName, mimeType: row.mimeType, size: media.buffer.length, sha256: createHash("sha256").update(media.buffer).digest("hex") })),
+  }
+  const studioZip = Buffer.from(zipSync({ "manifest.json": strToU8(JSON.stringify(studioManifest)), ...Object.fromEntries(studioMedia.map(row => [row.fileName, media.buffer])) }))
+  const download = async (action) => {
+    const [file] = await Promise.all([page.waitForEvent("download"), action()])
+    try {
+      const chunks = [], stream = await file.createReadStream()
+      assert.ok(stream)
+      for await (const chunk of stream) chunks.push(chunk)
+      return Buffer.concat(chunks)
+    } finally { await file.delete() }
+  }
+  const requests = []
+  page.on("request", request => {
+    if (request.method() !== "GET" && /(?:\/(?:inference|publish|responses|completions)(?:\/|$)|mind.*(?:chat|stream|infer|publish))/i.test(new URL(request.url()).pathname)) requests.push(new URL(request.url()).pathname)
+  })
+  try {
+    await openSync(page); await openConversations(dialog)
+    const first = await importWithNativeRefresh(page, dialog, JSON.stringify(fixture), ids)
+    await navigatePanel(dialog, "Library Assets")
+    await dialog.getByRole("button", { name: "Studio Sessions", exact: true }).click()
+    await dialog.getByTestId("studio-session-list").waitFor()
+    await dialog.getByLabel("Import Studio session", { exact: true }).setInputFiles({ name: "studio.zip", mimeType: "application/zip", buffer: studioZip })
+    await dialog.getByTestId("studio-import-preview").waitFor()
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 60000 }),
+      dialog.getByRole("button", { name: "Confirm import as new Studio session", exact: true }).click(),
+    ])
+    await openSync(page); await navigatePanel(dialog, "Library Assets")
+    await dialog.getByRole("button", { name: "Studio Sessions", exact: true }).click()
+    await dialog.getByTestId("studio-session-list").waitFor()
+    const card = dialog.locator("[data-studio-session-id]").filter({ hasText: studioName }).first()
+    const before = await libraryTestState(page)
+    const studioBefore = (await studioTestState(page, studioName)).fingerprint
+    await card.getByRole("button", { name: `Add to export basket: ${studioName}`, exact: true }).click()
+    await openConversations(dialog)
+    await dialog.locator(`[data-conversation-id="${first.id}"]`).getByRole("button", { name: `Add to export basket: ${fixture.conversation.name}`, exact: true }).click()
+    await dialog.getByRole("button", { name: "Export basket (2)", exact: true }).click()
+    const zip = await download(() => dialog.getByRole("button", { name: "Download export basket", exact: true }).click())
+    const entries = unzipSync(zip), manifest = JSON.parse(strFromU8(entries["manifest.json"]))
+    assert.equal(manifest.format, "venice-sync-batch"); assert.equal(manifest.version, 1)
+    assert.equal(manifest.items.length, 2)
+    assert.ok(Object.keys(entries).every(name => name === "manifest.json" || /^objects\/[a-f0-9]{64}$/.test(name)))
+    for (const item of manifest.items) for (const file of item.files) {
+      assert.equal(entries[`objects/${file.object}`].length, file.bytes)
+      assert.equal(createHash("sha256").update(entries[`objects/${file.object}`]).digest("hex"), file.object)
+    }
+    const mediaRefs = manifest.items.find(item => item.kind === "studio-image").files.filter(file => file.path.startsWith("media/"))
+    assert.equal(mediaRefs.length, 2)
+    assert.equal(mediaRefs[0].object, mediaRefs[1].object, "Identical originals were not deduplicated.")
+    await dialog.getByLabel("Open batch ZIP", { exact: true }).setInputFiles({ name: "batch.zip", mimeType: "application/zip", buffer: zip })
+    await dialog.getByRole("region", { name: "Opened batch contents", exact: true }).waitFor()
+    const restoredJson = await download(() => dialog.getByRole("button", { name: `Take out item: ${fixture.conversation.name}`, exact: true }).click())
+    const restored = JSON.parse(restoredJson.toString("utf8"))
+    assert.equal(restored.conversation.id, first.id)
+    assert.deepEqual(restored.messages.map(message => message.content), fixture.messages.map(message => message.content))
+    const restoredZip = await download(() => dialog.getByRole("button", { name: `Take out item: ${studioName}`, exact: true }).click())
+    const studio = unzipSync(restoredZip), restoredStudio = JSON.parse(strFromU8(studio["manifest.json"]))
+    assert.equal(restoredStudio.format, "venice-sync-studio-session")
+    for (const file of restoredStudio.files) assert.deepEqual(Buffer.from(studio[file.path]), media.buffer)
+    assert.deepEqual(await libraryTestState(page), before, "Batch preparation/open/extraction changed native storage.")
+    assert.deepEqual((await studioTestState(page, studioName)).fingerprint, studioBefore)
+    await dialog.getByLabel("Import conversation JSON", { exact: true }).setInputFiles({ name: "restored.json", mimeType: "application/json", buffer: restoredJson })
+    await dialog.getByTestId("import-preview").waitFor()
+    await dialog.getByRole("button", { name: "Cancel import", exact: true }).click()
+    await navigatePanel(dialog, "Library Assets")
+    await dialog.getByLabel("Import Studio session", { exact: true }).setInputFiles({ name: "restored.zip", mimeType: "application/zip", buffer: restoredZip })
+    await dialog.getByTestId("studio-import-preview").waitFor()
+    await dialog.getByRole("button", { name: "Cancel Studio import", exact: true }).click()
+    assert.deepEqual(await libraryTestState(page), before, "Standalone extracted-file previews changed storage.")
+    const original = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))
+    await page.setViewportSize({ width: 390, height: 844 })
+    await dialog.evaluate(async element => { await Promise.all(element.getAnimations().map(animation => animation.finished)) })
+    assert.equal(await dialog.evaluate(element => element.scrollWidth > element.clientWidth), false)
+    await dialog.getByRole("region", { name: "Export basket", exact: true }).screenshot({ path: path.join(root, "test-results/batch-basket-mobile.png") })
+    await page.setViewportSize(original)
+    assert.equal(requests.length, 0)
+    return { mixedConversationAndStudioBasket: "passed", independentObjectsAndHashes: "matched", identicalOriginalsDeduplicated: "passed",
+      reconstructedJsonAndStudioZip: "passed", existingImportPreviews: "passed", exportAndExtractionReadOnly: "passed",
+      mobile390px: "passed", inferenceOrPublishRequests: 0, scriptEvaluatedByPlaywright: false }
+  } catch (error) {
+    console.error("Batch E2E failed before cleanup:", error)
+    throw error
+  } finally {
+    assert.deepEqual((await studioTestState(page, studioName, true)).fingerprint, studioBaseline)
+    await cleanupSyntheticChats(page, ids)
+    assert.deepEqual(await libraryTestState(page), baseline, "Batch fixture cleanup changed existing data.")
+    await page.close()
+  }
+}
+
 async function sidebarLauncherTest(context) {
   const page = await context.newPage()
   await page.goto("https://venice.ai/chat/agent", { waitUntil: "domcontentloaded" })
@@ -1772,6 +1884,7 @@ async function main() {
     if (studioTransfer) result.studioSessions = {
       image: await studioSessionTransferTest(context), audio: await studioSessionTransferTest(context, "audio"),
     }
+    if (batchTransfer) result.batchExport = await batchExportTest(context)
     const artifact = await readFile(path.join(root, "dist/venice-sync.user.js"))
     const report = {
       timestamp: new Date().toISOString(),
@@ -1779,8 +1892,8 @@ async function main() {
       artifactSha256: createHash("sha256").update(artifact).digest("hex"),
       installedViaTampermonkeyUiThisRun: install,
       ...result,
-      veniceRecordContentsReadByTest: transfer || mindTransfer || mindPackage || agenticTransfer || charactersTransfer || libraryTransfer || studioTransfer,
-      veniceStorageWrittenByTest: transfer || mindTransfer || mindPackage || agenticTransfer || charactersTransfer || libraryTransfer || studioTransfer,
+      veniceRecordContentsReadByTest: transfer || mindTransfer || mindPackage || agenticTransfer || charactersTransfer || libraryTransfer || studioTransfer || batchTransfer,
+      veniceStorageWrittenByTest: transfer || mindTransfer || mindPackage || agenticTransfer || charactersTransfer || libraryTransfer || studioTransfer || batchTransfer,
     }
     await writeFile(
       path.join(root, "test-results/e2e-result.json"),

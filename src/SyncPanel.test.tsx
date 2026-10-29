@@ -90,6 +90,33 @@ describe("transfer-focused WebUI", () => {
     expect(readStorageOverview).not.toHaveBeenCalled()
     expect(listClassicConversations).not.toHaveBeenCalled()
   })
+  it("retains a cross-page shopping basket while keeping the four category pages separate", async () => {
+    vi.mocked(listClassicConversations).mockResolvedValue([{ id: "a", name: "Chat A", modelId: "model", messages: 1, updatedAt: 1 }])
+    vi.mocked(listCharacters).mockResolvedValue([{ id: "b", name: "Character B", description: "", hasPhoto: false }])
+    render(<SyncPanel {...props} />)
+    await navigate("Conversations")
+    await userEvent.click(await screen.findByRole("button", { name: "Add to export basket: Chat A" }))
+    await navigate("Characters")
+    await userEvent.click(await screen.findByRole("button", { name: "Add to export basket: Character B" }))
+    expect(screen.getByRole("button", { name: "Export basket (2)" })).toBeVisible()
+    await navigate("Conversations")
+    expect(screen.getByRole("button", { name: "Remove from export basket: Chat A" })).toHaveAttribute("aria-pressed", "true")
+    await userEvent.click(screen.getByRole("button", { name: "Export basket (2)" }))
+    expect(screen.getByRole("button", { name: "Remove basket item: Character B" })).toBeVisible()
+  })
+  it("adds every loaded Studio session, including rows beyond the 24-item display page", async () => {
+    vi.mocked(listStudioSessions).mockResolvedValue(Array.from({ length: 25 }, (_, index) => ({
+      id: `session-${index}`, kind: "image", name: `Session ${index}`, type: "edit", updatedAt: 1,
+    })))
+    render(<SyncPanel {...props} />)
+    await navigate("Library Assets")
+    await userEvent.click(screen.getByRole("button", { name: "Studio Sessions" }))
+    await screen.findByText("25 Studio sessions")
+    expect(screen.queryByRole("heading", { name: "Session 24" })).toBeNull()
+    await userEvent.click(screen.getByRole("button", { name: "Add all loaded Studio sessions (25)" }))
+    await userEvent.click(screen.getByRole("button", { name: "Export basket (25)" }))
+    expect(screen.getByRole("button", { name: "Remove basket item: Session 24" })).toBeVisible()
+  })
 
   it("opens real Character transfer separately from conversations", async () => {
     render(<SyncPanel {...props} />)

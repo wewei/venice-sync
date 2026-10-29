@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button"
 import { IconAction } from "./components/IconAction"
 import { decodeStudioPackage, encodeStudioPackage, MAX_STUDIO_ZIP, type StudioPackage } from "./studio-session-format"
 import { exportStudioSession, importStudioSession, listStudioSessions, type StudioSession } from "./venice-studio"
+import { BasketAddAll, BasketItem } from "./BatchBasket"
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error)
 export function StudioTransfer({ reloadPage }: { reloadPage: () => void }) {
@@ -68,6 +69,7 @@ export function StudioTransfer({ reloadPage }: { reloadPage: () => void }) {
       onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void selectFile(file) }} />
     {loading && <p role="status">Reading Studio sessions...</p>}
     {error && <p role="alert">{error}</p>}
+    {!loading && <BasketAddAll items={sessions.map(session => ({ kind: session.kind === "image" ? "studio-image" : "studio-audio", id: session.id, title: session.name }))} label="loaded Studio sessions" disabled={busy} />}
     {!loading && <div data-testid="studio-session-list" className="grid gap-3">
       <p className="text-sm text-muted-foreground">{sessions.length} Studio sessions</p>
       {!sessions.length && !error && <p>No classic Studio sessions in this account.</p>}
@@ -75,6 +77,7 @@ export function StudioTransfer({ reloadPage }: { reloadPage: () => void }) {
         {session.kind === "audio" ? <IconFileMusic className="size-8 shrink-0 text-muted-foreground" aria-hidden="true" /> : <IconPhoto className="size-8 shrink-0 text-muted-foreground" aria-hidden="true" />}
         <div className="min-w-0 flex-1"><h3 className="truncate font-medium" title={session.name}>{session.name}</h3>
           <p className="mt-1 text-xs text-muted-foreground">{session.kind} · {session.type} · {new Date(session.updatedAt).toLocaleString()}</p></div>
+        <BasketItem item={{ kind: session.kind === "image" ? "studio-image" : "studio-audio", id: session.id, title: session.name }} disabled={busy} />
         <IconAction label="Export Studio session ZIP" disabled={busy || loading} onClick={() => void download(session)}><IconDownload aria-hidden="true" /></IconAction>
       </article>)}
       {sessions.length > visible && <Button variant="outline" disabled={busy} onClick={() => setVisible((value) => value + 24)}>Show more sessions</Button>}

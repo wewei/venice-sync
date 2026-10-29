@@ -5,6 +5,7 @@ import { decodeMindPackage, encodeMindPackage, MAX_MIND_PACKAGE_BYTES, type Mind
 import { exportMindPackage, importMindPackage, listMindDefinitions } from "./venice-mind-package"
 import { IconAction } from "./components/IconAction"
 import { MindAvatar } from "./MindAvatar"
+import { BasketAddAll, BasketItem } from "./BatchBasket"
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error)
 
@@ -72,6 +73,7 @@ export function MindDefinitionTransfer() {
         onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void selectFile(file) }} />
       {loading && <p role="status">Reading Mind definitions...</p>}
       {error && <p role="alert">{error}</p>}
+      {!loading && <BasketAddAll items={minds.map(mind => ({ kind: "mind", id: mind.id, title: mind.name }))} label="loaded Minds" disabled={busy} />}
       {!loading && !error && <div data-testid="mind-definition-list" className="grid gap-2">
         <p className="text-sm text-muted-foreground">{minds.length} local Mind definitions</p>
         {minds.length === 0 && <p>No local Mind definitions in this account.</p>}
@@ -80,6 +82,7 @@ export function MindDefinitionTransfer() {
           <div className="min-w-0 flex-1"><h3 className="truncate font-medium" title={mind.name}>{mind.name}</h3>
             <p className="mt-1 text-sm text-muted-foreground">{mind.assets} reference files{mind.published ? " · Published source" : " · Local Mind"}</p>
           </div>
+          <BasketItem item={{ kind: "mind", id: mind.id, title: mind.name }} disabled={busy} />
           <IconAction label="Export Mind package" disabled={busy} onClick={() => void download(mind.id)}><IconDownload aria-hidden="true" /></IconAction>
         </article>)}
       </div>}
