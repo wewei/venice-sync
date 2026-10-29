@@ -150,7 +150,7 @@ export function BatchBasket({ children, header, reloadPage, onImportingChange }:
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 [overflow-wrap:anywhere]">
             {error && <p role="alert">{error}</p>}
             {notice && <p role="status">{notice}</p>}
-            <section hidden={view !== "export"} aria-label="Export basket" className="grid gap-3" data-testid="batch-basket-details">
+            <section hidden={view !== "export"} aria-label="Export basket" className="grid min-w-0 gap-3" data-testid="batch-basket-details">
               <div className="flex flex-wrap items-center gap-2">
                 <IconAction label="Download export basket" disabled={busy || !items.length} onClick={() => void download()}><IconDownload aria-hidden="true" /></IconAction>
                 {busy && exporting && <Button size="sm" variant="outline" onClick={() => controller.current?.abort()}>Cancel batch export</Button>}
@@ -164,16 +164,16 @@ export function BatchBasket({ children, header, reloadPage, onImportingChange }:
                 <IconAction label={`Remove basket item: ${item.title}`} disabled={busy} onClick={() => remove(item)}><IconX aria-hidden="true" /></IconAction>
               </div>)}
             </section>
-            <section hidden={view !== "import"} aria-label="Import from backup" className="grid gap-3">
+            <section hidden={view !== "import"} aria-label="Import from backup" className="grid min-w-0 gap-3">
               <p className="text-xs text-muted-foreground">Open and validate a backup read-only, then select and review items before explicitly confirming new copies. This list is separate from your export basket.</p>
               <Button variant="outline" disabled={busy} onClick={() => fileInput.current?.click()}><IconFolderOpen aria-hidden="true" />Open batch archive</Button>
               {busy && !exporting && !importing && <p role="status">Verifying batch archive...</p>}
               <input ref={fileInput} type="file" accept=".zip" aria-label="Open batch ZIP" className="sr-only" tabIndex={-1} disabled={busy}
                 onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void openArchive(file) }} />
-              {archive && <section aria-label="Opened batch contents" className="grid gap-2">
+              {archive && <section aria-label="Opened batch contents" className="grid min-w-0 gap-2">
                 <h3 className="font-medium">Verified backup ({archive.manifest.items.length} items)</h3>
                 <Button size="sm" variant="ghost" className="w-fit" disabled={busy} onClick={() => setArchive(undefined)}>Close opened batch</Button>
-                <details>
+                <details className="min-w-0">
                   <summary className="min-h-11 cursor-pointer py-3">Take out original files</summary>
                   {archive.manifest.items.map(item => <div key={batchKey(item)} className="flex min-w-0 items-center gap-2">
                     <span className="min-w-0 flex-1 truncate" title={item.title}>{item.kind} · {item.title}</span>

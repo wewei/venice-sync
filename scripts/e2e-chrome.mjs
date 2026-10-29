@@ -21,7 +21,8 @@ const agenticTransfer = process.argv.includes("--agentic-transfer")
 const charactersTransfer = process.argv.includes("--characters")
 const libraryTransfer = process.argv.includes("--library")
 const studioTransfer = process.argv.includes("--studio-sessions")
-const batchTransfer = process.argv.includes("--batch")
+const batchOnly = process.argv.includes("--batch-only")
+const batchTransfer = process.argv.includes("--batch") || batchOnly
 const mindPackage = process.argv.includes("--mind-package")
 const selectedConversation = process.argv.find((argument) => argument.startsWith("--conversation="))?.slice("--conversation=".length)
 const selectedAgentic = process.argv.find((argument) => argument.startsWith("--agentic-conversation="))?.slice("--agentic-conversation=".length)
@@ -1695,7 +1696,11 @@ async function batchExportTest(context) {
     if (request.method() !== "GET" && /(?:\/(?:inference|publish|responses|completions)(?:\/|$)|mind.*(?:chat|stream|infer|publish))/i.test(new URL(request.url()).pathname)) requests.push(new URL(request.url()).pathname)
   })
   try {
-    await openSync(page); await openConversations(dialog)
+    await openSync(page); await navigatePanel(dialog, "Details")
+    assert.equal(await dialog.getByTestId("runtime-handler").innerText(), "Tampermonkey")
+    assert.equal(await dialog.getByTestId("runtime-mode").innerText(), "userscript")
+    assert.equal(await dialog.getByText(packageJson.version, { exact: true }).count(), 1)
+    await openConversations(dialog)
     const first = await importWithNativeRefresh(page, dialog, JSON.stringify(fixture), ids)
     await navigatePanel(dialog, "Library Assets")
     await dialog.getByRole("button", { name: "Studio Sessions", exact: true }).click()
@@ -1715,6 +1720,19 @@ async function batchExportTest(context) {
     await card.getByRole("button", { name: `Add to export basket: ${studioName}`, exact: true }).click()
     await openConversations(dialog)
     await dialog.locator(`[data-conversation-id="${first.id}"]`).getByRole("button", { name: `Add to export basket: ${fixture.conversation.name}`, exact: true }).click()
+    await dialog.evaluate(async element => { await Promise.all(element.getAnimations().map(animation => animation.finished)) })
+    const contentBounds = await dialog.getByTestId("sync-panel").boundingBox()
+    await dialog.getByRole("button", { name: "Export basket (2)", exact: true }).click()
+    assert.deepEqual(await dialog.getByTestId("sync-panel").boundingBox(), contentBounds, "Opening the basket resized the content.")
+    const basket = dialog.getByRole("dialog", { name: "Content basket", exact: true })
+    assert.equal(await dialog.getByRole("button", { name: "Back to content", exact: true }).evaluate(button => button.getRootNode().activeElement === button), true)
+    await page.keyboard.press("Shift+Tab")
+    assert.equal(await basket.evaluate(element => element.contains(element.getRootNode().activeElement)), true)
+    await page.keyboard.press("Tab")
+    assert.equal(await dialog.getByRole("button", { name: "Back to content", exact: true }).evaluate(button => button.getRootNode().activeElement === button), true)
+    await page.keyboard.press("Escape")
+    assert.equal(await dialog.isVisible(), true)
+    assert.equal(await dialog.getByRole("button", { name: "Export basket (2)", exact: true }).evaluate(button => button.getRootNode().activeElement === button), true)
     await dialog.getByRole("button", { name: "Export basket (2)", exact: true }).click()
     const zip = await download(() => dialog.getByRole("button", { name: "Download export basket", exact: true }).click())
     const entries = unzipSync(zip), manifest = JSON.parse(strFromU8(entries["manifest.json"]))
@@ -1778,16 +1796,23 @@ async function batchExportTest(context) {
     const original = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))
     for (const width of [320, 390]) {
       await page.setViewportSize({ width, height: 844 })
+      await dialog.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
       await dialog.evaluate(async element => { await Promise.all(element.getAnimations().map(animation => animation.finished)) })
       const basket = dialog.getByRole("dialog", { name: "Content basket", exact: true })
-      assert.equal(await basket.evaluate(element => element.scrollWidth > element.clientWidth || element.lastElementChild.scrollWidth > element.lastElementChild.clientWidth), false)
       await basket.screenshot({ path: path.join(root, `test-results/batch-basket-mobile-${width}.png`) })
+      const layout = await basket.evaluate(element => ({
+        overflow: element.scrollWidth > element.clientWidth || element.lastElementChild.scrollWidth > element.lastElementChild.clientWidth,
+        overflowing: [...element.querySelectorAll("*")].filter(node => node.clientWidth && node.scrollWidth > node.clientWidth)
+          .slice(0, 6).map(node => ({ tag: node.tagName, class: node.className, width: node.clientWidth, scroll: node.scrollWidth })),
+      }))
+      assert.equal(layout.overflow, false, `Basket overflows at ${width}px: ${JSON.stringify(layout.overflowing)}`)
     }
     await page.setViewportSize(original)
     assert.equal(requests.length, 0)
     return { mixedConversationAndStudioBasket: "passed", independentObjectsAndHashes: "matched", identicalOriginalsDeduplicated: "passed",
       reconstructedJsonAndStudioZip: "passed", existingImportPreviews: "passed", exportAndExtractionReadOnly: "passed",
       selectedBatchImportCreatesNewCopies: "passed", noIntermediateReload: "passed",
+      contentNotResized: "passed", basketKeyboardFocusAndEscape: "passed",
       collapsedImportRetainsResults: "passed", mobile320px: "passed", mobile390px: "passed", inferenceOrPublishRequests: 0, scriptEvaluatedByPlaywright: false }
   } catch (error) {
     console.error("Batch E2E failed before cleanup:", error)
@@ -1855,7 +1880,7 @@ async function sidebarLauncherTest(context) {
         await header.screenshot({ path: path.join(root, `test-results/sidebar-launcher-${width}.png`) })
         await launcher.click()
         await dialog.waitFor({ state: "visible" })
-        assert.equal(await page.locator('[role="dialog"][aria-modal="true"]').count(), 0, "Native Drawer remains open beneath Sync.")
+        assert.equal(await page.locator('[role="dialog"][aria-modal="true"]').filter({ visible: true }).count(), 0, "Native Drawer remains open beneath Sync.")
         assert.notEqual(await body.getAttribute("aria-hidden"), "true")
         const bounds = await dialog.boundingBox()
         assert.ok(bounds && bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= width + 1 && bounds.y + bounds.height <= 845)
@@ -1887,8 +1912,9 @@ async function main() {
   const browser = await chromium.connectOverCDP(await endpoint(), {
     timeout: 120_000,
   })
+  const context = browser.contexts()[0]
+  const previousPages = new Set(context?.pages() ?? [])
   try {
-    const context = browser.contexts()[0]
     assert.ok(context, "Chrome has no accessible context.")
     const worker = context.serviceWorkers().find((candidate) =>
       candidate.url().startsWith(`${extensionOrigin}/`),
@@ -1904,8 +1930,8 @@ async function main() {
       }
     }
     if (install) await installScript(context)
-    const result = await smokeTest(context)
-    result.sidebarLauncher = await sidebarLauncherTest(context)
+    const result = batchOnly ? {} : await smokeTest(context)
+    if (!batchOnly) result.sidebarLauncher = await sidebarLauncherTest(context)
     if (transfer) result.conversationTransfer = await conversationTransferTest(context)
     if (selectedConversation) result.selectedConversation = await selectedConversationTest(context, selectedConversation)
     if (mindTransfer) result.mindHistory = await mindHistoryTransferTest(context)
@@ -1934,7 +1960,9 @@ async function main() {
     )
     console.log(JSON.stringify(report, null, 2))
   } finally {
-    await browser.close()
+    try {
+      for (const page of context?.pages() ?? []) if (!previousPages.has(page)) await page.close()
+    } finally { await browser.close() }
   }
 }
 

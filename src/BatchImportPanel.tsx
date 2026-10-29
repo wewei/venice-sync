@@ -52,7 +52,7 @@ export function BatchImportPanel({ archive, busy, onBusyChange, onImportingChang
       abort.current = undefined
     }
   }
-  return <section aria-label="Selected batch import" className="grid gap-3 border-t pt-3">
+  return <section aria-label="Selected batch import" className="grid min-w-0 gap-3 border-t pt-3">
     <h3 className="font-medium">Import selected items as new copies</h3>
     <p className="text-xs text-muted-foreground">Select, review, then confirm. All formats/hashes are checked before writes. Imported Mind definitions are created before their selected local histories; other Mind histories require an explicit destination. Existing data is not overwritten.</p>
     <div className="flex flex-wrap gap-2">
@@ -68,7 +68,7 @@ export function BatchImportPanel({ archive, busy, onBusyChange, onImportingChang
       </label>
     })}
     <Button size="sm" variant="outline" disabled={busy || !selected.length} onClick={() => void review()}>Review {selected.length} selected imports</Button>
-    {plan && <div data-testid="batch-import-preview" className="grid gap-3 rounded-lg border p-3">
+    {plan && <div data-testid="batch-import-preview" className="grid min-w-0 gap-3 rounded-lg border p-3">
       <p>{plan.entries.length} items will be imported sequentially. This is not an all-or-nothing transaction. On failure, later items stop and successful copies remain. Cancellation stops after the current item; attempted items are disabled to prevent accidental duplication.</p>
       <p>Save drafts and finish generation first. Keep this page open. There is no automatic page reload; review results and use Refresh Venice once afterwards.</p>
       {plan.entries.map(entry => <div key={batchKey(entry.item)} className="grid gap-1">
@@ -88,7 +88,7 @@ export function BatchImportPanel({ archive, busy, onBusyChange, onImportingChang
     {running && <Button variant="outline" onClick={() => abort.current?.abort()}>Stop after current item</Button>}
     {error && <p role="alert">{error}</p>}
     {notice && <p role="status">{notice}</p>}
-    {!!results.length && <div role="log" aria-label="Batch import results" className="grid gap-1">
+    {!!results.length && <div role="log" aria-label="Batch import results" className="grid min-w-0 gap-1">
       {results.map(result => <p key={result.key} data-batch-result-key={result.key} data-batch-result-status={result.status} data-batch-new-id={result.id}>{result.status === "success" ? "Imported" : "Failed"}: {result.kind} · {result.title}{result.id ? ` · New ID: ${result.id}` : ""}{result.error ? ` · ${result.error}` : ""}</p>)}
     </div>}
     {needsReload && <Button disabled={busy} onClick={() => {

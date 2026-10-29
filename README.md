@@ -618,6 +618,12 @@ $env:CDP_ENDPOINT = "http://127.0.0.1:9223"
 npm run test:e2e -- --install --batch
 ```
 
+For a bounded basket-only run without repeating the launcher/storage smoke
+suite, use `--batch-only` instead of `--batch` (optionally with `--install`).
+It checks the installed Tampermonkey runtime before the basket transfers.
+The runner closes only tabs it created, including after a failure; pre-existing
+tabs are preserved.
+
 Sign in to Venice and install Tampermonkey in that instance independently.
 Enable **Allow user scripts** in that instance's extension details too; an
 enabled extension alone is insufficient. Neither credentials nor browser profile
